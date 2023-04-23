@@ -7,12 +7,12 @@ WANDB_USER="none"
 
 EXPERIMENT=conformal_0.5_dist_pixel_100_kernel201
 
-CONCEPT=BUNNY
-WORD=BUNNY
-fonts=(KaushanScript-Regular)
+CONCEPT="none"
+WORD=e
+fonts=(IndieFlower-Regular)
 for j in "${fonts[@]}"
 do
-    letter_=("Y")
+    letter_=("e")
     SEED=0
     for i in "${letter_[@]}"
     do

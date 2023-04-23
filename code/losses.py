@@ -7,8 +7,11 @@ from torch.nn import functional as nnf
 from easydict import EasyDict
 from shapely.geometry import Point
 from shapely.geometry.polygon import Polygon
-
+import torchvision.transforms as T
 from diffusers import StableDiffusionPipeline
+
+import open_clip
+from utils import *
 
 class SDSLoss(nn.Module):
     def __init__(self, cfg, device):
@@ -175,5 +178,39 @@ class ConformalLoss:
         return loss_angles
 
 
+class CLIPLoss(nn.Module):
+    def __init__(self, device: torch.device, target_text: str, init_text: str, DUAL=True):
+        super(CLIPLoss, self).__init__()
+        self.render_width = 224
+        self.render_height = 224
+        # self.model, _, self.preprocess = open_clip.create_model_and_transforms('ViT-L-14', pretrained='laion400m_e32')
+        #self.tokenizer = open_clip.get_tokenizer('ViT-L-14')
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms('ViT-g-14', pretrained='laion2b_s12b_b42k')
+        self.tokenizer = open_clip.get_tokenizer('ViT-g-14')
+        
+        self.model.requires_grad_(False)
+        self.model.to(device)
+        self.target_text = self.tokenizer(["a word of '" + target_text + "'"])
+        if DUAL:
+            self.init_text = self.tokenizer(["a word of '" + init_text + "'"])
+        self.transform = lambda x: torchvision.transforms.functional.affine(img=x, angle=180.0, translate=(0, 0), scale=1.0, shear=0.0, interpolation=T.InterpolationMode.BILINEAR)
+        #self.transform = lambda x: torch.rot90(x, 2, [-2, -1]) ## torch transform affine
+        self.DUAL = DUAL
+        self.device = device
 
+    def forward(self, img):
+        clip_loss = 0
+        img = diff_norm(img, [0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
+        if self.DUAL:
+            model_out = self.model(img.to(self.device), self.init_text.to(self.device))
+            logits_per_image = model_out[0]
+            logits_per_text = model_out[1]
+            logits = torch.mean(logits_per_image @ logits_per_text.T)
+            clip_loss = clip_loss - logits
+        model_out = self.model(self.transform(img).to(self.device), self.target_text.to(self.device))
+        logits_per_image = model_out[0]
+        logits_per_text = model_out[1]
+        logits = torch.mean(logits_per_image @ logits_per_text.T)
+        clip_loss = clip_loss - logits
+        return clip_loss
 

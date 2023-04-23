@@ -7,7 +7,7 @@ import torch
 from torch.optim.lr_scheduler import LambdaLR
 import pydiffvg
 import save_svg
-from losses import SDSLoss, ToneLoss, ConformalLoss
+from losses import SDSLoss, ToneLoss, ConformalLoss, CLIPLoss
 from config import set_config
 from utils import (
     check_and_create_dir,
@@ -53,8 +53,9 @@ if __name__ == "__main__":
     print("preprocessing")
     preprocess(cfg.font, cfg.word, cfg.optimized_letter, cfg.level_of_cc)
 
-    if cfg.loss.use_sds_loss:
-        sds_loss = SDSLoss(cfg, device)
+    #if cfg.loss.use_sds_loss:
+    #    sds_loss = SDSLoss(cfg, device)
+    clip_loss = CLIPLoss(device, "o", "e", DUAL=True)
 
     h, w = cfg.render_size, cfg.render_size
 
@@ -133,9 +134,11 @@ if __name__ == "__main__":
         x_aug = data_augs.forward(x)
 
         # compute diffusion loss per pixel
-        loss = sds_loss(x_aug)
-        if cfg.use_wandb:
-            wandb.log({"sds_loss": loss.item()}, step=step)
+        # loss = sds_loss(x_aug)
+        loss = clip_loss.forward(x_aug)
+        
+        # if cfg.use_wandb:
+        #    wandb.log({"sds_loss": loss.item()}, step=step)
 
         if cfg.loss.tone.use_tone_loss:
             tone_loss_res = tone_loss(x, step)

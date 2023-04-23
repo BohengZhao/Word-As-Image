@@ -9,6 +9,8 @@ import cv2
 from ttf import font_string_to_svgs, normalize_letter_size
 import torch
 import numpy as np
+import torchvision.transforms.functional as F
+import torchvision.transforms as transforms
 
 
 def edict_2_dict(x):
@@ -215,7 +217,24 @@ def create_video(num_iter, experiment_dir, video_frame_freq):
     video_name = os.path.join(
         experiment_dir, "video.mp4")
     check_and_create_dir(video_name)
-    out = cv2.VideoWriter(video_name, cv2.VideoWriter_fourcc(*'mp4v'), 30.0, (600, 600))
+    out = cv2.VideoWriter(video_name, cv2.VideoWriter_fourcc(*'mp4v'), 60.0, (500, 500))
     for iii in range(len(img_array)):
         out.write(img_array[iii])
     out.release()
+
+# New functions
+
+def diff_norm(input, mean, std):
+    if (len(input.shape) == 3):
+        for i in range(input.shape[0]):
+            input[i] = (input[i] - mean[i]) / std[i]
+    elif (len(input.shape) == 4):
+        for i in range(input.shape[0]):
+            for j in range(input.shape[1]):
+                input[i, j] = (input[i, j] - mean[j]) / std[j]
+    return input
+
+
+def augment(image):
+    image = transforms.RandomAffine(degrees=10, translate=(0.2, 0.2), scale=(0.9, 1.1), fill=0)(image)
+    return image

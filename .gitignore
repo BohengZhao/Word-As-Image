@@ -1,0 +1,5 @@
+output/
+code/__pycache__/
+*.mp4
+slurm-*
+TOKEN
