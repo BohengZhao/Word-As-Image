@@ -7,7 +7,7 @@ import torch
 from torch.optim.lr_scheduler import LambdaLR
 import pydiffvg
 import save_svg
-from losses import SDSLoss, ToneLoss, ConformalLoss, CLIPLoss
+from losses import SDSLoss, ToneLoss, ConformalLoss, CLIPLoss, TrOCRLoss
 from config import set_config
 from utils import (
     check_and_create_dir,
@@ -28,7 +28,8 @@ gamma = 1.0
 def init_shapes(svg_path, trainable: Mapping[str, bool]):
 
     svg = f'{svg_path}.svg'
-    canvas_width, canvas_height, shapes_init, shape_groups_init = pydiffvg.svg_to_scene(svg)
+    canvas_width, canvas_height, shapes_init, shape_groups_init = pydiffvg.svg_to_scene(
+        svg)
 
     parameters = edict()
 
@@ -43,7 +44,7 @@ def init_shapes(svg_path, trainable: Mapping[str, bool]):
 
 
 if __name__ == "__main__":
-    
+
     cfg = set_config()
 
     # use GPU if available
@@ -53,9 +54,15 @@ if __name__ == "__main__":
     print("preprocessing")
     preprocess(cfg.font, cfg.word, cfg.optimized_letter, cfg.level_of_cc)
 
-    #if cfg.loss.use_sds_loss:
+    # if cfg.loss.use_sds_loss:
     #    sds_loss = SDSLoss(cfg, device)
-    clip_loss = CLIPLoss(device, "o", "e", DUAL=True)
+    if cfg.loss.use_clip_loss:
+        clip_loss = CLIPLoss(device, target_text="y",
+                             init_text="h", DUAL=False)
+
+    if cfg.loss.use_trocr_loss:
+        trocr_loss = TrOCRLoss(
+            device=device, target_text="y", batch_size=cfg.batch_size)
 
     h, w = cfg.render_size, cfg.render_size
 
@@ -65,12 +72,15 @@ if __name__ == "__main__":
 
     # initialize shape
     print('initializing shape')
-    shapes, shape_groups, parameters = init_shapes(svg_path=cfg.target, trainable=cfg.trainable)
+    shapes, shape_groups, parameters = init_shapes(
+        svg_path=cfg.target, trainable=cfg.trainable)
 
-    scene_args = pydiffvg.RenderFunction.serialize_scene(w, h, shapes, shape_groups)
+    scene_args = pydiffvg.RenderFunction.serialize_scene(
+        w, h, shapes, shape_groups)
     img_init = render(w, h, 2, 2, 0, None, *scene_args)
     img_init = img_init[:, :, 3:4] * img_init[:, :, :3] + \
-               torch.ones(img_init.shape[0], img_init.shape[1], 3, device=device) * (1 - img_init[:, :, 3:4])
+        torch.ones(img_init.shape[0], img_init.shape[1],
+                   3, device=device) * (1 - img_init[:, :, 3:4])
     img_init = img_init[:, :, :3]
     if cfg.use_wandb:
         plt.imshow(img_init.detach().cpu())
@@ -93,32 +103,40 @@ if __name__ == "__main__":
     optim = torch.optim.Adam(pg, betas=(0.9, 0.9), eps=1e-6)
 
     if cfg.loss.conformal.use_conformal_loss:
-        conformal_loss = ConformalLoss(parameters, device, cfg.optimized_letter, shape_groups)
+        conformal_loss = ConformalLoss(
+            parameters, device, cfg.optimized_letter, shape_groups)
 
-    lr_lambda = lambda step: learning_rate_decay(step, cfg.lr.lr_init, cfg.lr.lr_final, num_iter,
-                                                 lr_delay_steps=cfg.lr.lr_delay_steps,
-                                                 lr_delay_mult=cfg.lr.lr_delay_mult) / cfg.lr.lr_init
+    def lr_lambda(step): return learning_rate_decay(step, cfg.lr.lr_init, cfg.lr.lr_final, num_iter,
+                                                    lr_delay_steps=cfg.lr.lr_delay_steps,
+                                                    lr_delay_mult=cfg.lr.lr_delay_mult) / cfg.lr.lr_init
 
-    scheduler = LambdaLR(optim, lr_lambda=lr_lambda, last_epoch=-1)  # lr.base * lrlambda_f
+    scheduler = LambdaLR(optim, lr_lambda=lr_lambda,
+                         last_epoch=-1)  # lr.base * lrlambda_f
 
     print("start training")
     # training loop
     t_range = tqdm(range(num_iter))
     for step in t_range:
+        loss_sum = 0.0
         if cfg.use_wandb:
-            wandb.log({"learning_rate": optim.param_groups[0]['lr']}, step=step)
+            wandb.log(
+                {"learning_rate": optim.param_groups[0]['lr']}, step=step)
         optim.zero_grad()
 
         # render image
-        scene_args = pydiffvg.RenderFunction.serialize_scene(w, h, shapes, shape_groups)
+        scene_args = pydiffvg.RenderFunction.serialize_scene(
+            w, h, shapes, shape_groups)
         img = render(w, h, 2, 2, step, None, *scene_args)
 
         # compose image with white background
-        img = img[:, :, 3:4] * img[:, :, :3] + torch.ones(img.shape[0], img.shape[1], 3, device=device) * (1 - img[:, :, 3:4])
+        img = img[:, :, 3:4] * img[:, :, :3] + \
+            torch.ones(img.shape[0], img.shape[1], 3,
+                       device=device) * (1 - img[:, :, 3:4])
         img = img[:, :, :3]
 
         if cfg.save.video and (step % cfg.save.video_frame_freq == 0 or step == num_iter - 1):
-            save_image(img, os.path.join(cfg.experiment_dir, "video-png", f"iter{step:04d}.png"), gamma)
+            save_image(img, os.path.join(cfg.experiment_dir,
+                       "video-png", f"iter{step:04d}.png"), gamma)
             filename = os.path.join(
                 cfg.experiment_dir, "video-svg", f"iter{step:04d}.svg")
             check_and_create_dir(filename)
@@ -135,8 +153,12 @@ if __name__ == "__main__":
 
         # compute diffusion loss per pixel
         # loss = sds_loss(x_aug)
-        loss = clip_loss.forward(x_aug)
-        
+        if cfg.loss.use_clip_loss:
+            loss = clip_loss.forward(x_aug)
+
+        if cfg.loss.use_trocr_loss:
+            loss = trocr_loss.forward(x_aug)
+
         # if cfg.use_wandb:
         #    wandb.log({"sds_loss": loss.item()}, step=step)
 
@@ -179,7 +201,8 @@ if __name__ == "__main__":
 
     if cfg.save.video:
         print("saving video")
-        create_video(cfg.num_iter, cfg.experiment_dir, cfg.save.video_frame_freq)
+        create_video(cfg.num_iter, cfg.experiment_dir,
+                     cfg.save.video_frame_freq)
 
     if cfg.use_wandb:
         wandb.finish()
