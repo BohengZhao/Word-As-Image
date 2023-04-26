@@ -5,14 +5,15 @@ set -e
 USE_WANDB=0 # CHANGE IF YOU WANT WANDB
 WANDB_USER="none"
 
-EXPERIMENT=conformal_0.5_dist_pixel_100_kernel201
+# tone_plus_conformal, tone, conformal, none, trocr
+EXPERIMENT=trocr
 
 CONCEPT="none"
-WORD=e
+WORD=h
 fonts=(IndieFlower-Regular)
 for j in "${fonts[@]}"
 do
-    letter_=("e")
+    letter_=("h")
     SEED=0
     for i in "${letter_[@]}"
     do
