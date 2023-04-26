@@ -8,15 +8,17 @@ import torch
 import save_svg
 
 device = torch.device("cuda" if (
-        torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu")
+    torch.cuda.is_available() and torch.cuda.device_count() > 0) else "cpu")
 
 reload(bezier)
 
-def fix_single_svg(svg_path, all_word=False):
-    target_h_letter = 360
-    target_canvas_width, target_canvas_height = 600, 600
 
-    canvas_width, canvas_height, shapes, shape_groups = pydiffvg.svg_to_scene(svg_path)
+def fix_single_svg(svg_path, all_word=False):
+    target_h_letter = 90
+    target_canvas_width, target_canvas_height = 500, 500
+
+    canvas_width, canvas_height, shapes, shape_groups = pydiffvg.svg_to_scene(
+        svg_path)
 
     letter_h = canvas_height
     letter_w = canvas_width
@@ -39,15 +41,20 @@ def fix_single_svg(svg_path, all_word=False):
         p.points[:, 0] = p.points[:, 0] * scale_canvas_w
         p.points[:, 1] = p.points[:, 1] * scale_canvas_h + target_h_letter
 
-    w_min, w_max = min([torch.min(p.points[:, 0]) for p in shapes]), max([torch.max(p.points[:, 0]) for p in shapes])
-    h_min, h_max = min([torch.min(p.points[:, 1]) for p in shapes]), max([torch.max(p.points[:, 1]) for p in shapes])
+    w_min, w_max = min([torch.min(p.points[:, 0]) for p in shapes]), max(
+        [torch.max(p.points[:, 0]) for p in shapes])
+    h_min, h_max = min([torch.min(p.points[:, 1]) for p in shapes]), max(
+        [torch.max(p.points[:, 1]) for p in shapes])
 
     for num, p in enumerate(shapes):
-        p.points[:, 0] = p.points[:, 0] + target_canvas_width/2 - int(w_min + (w_max - w_min) / 2)
-        p.points[:, 1] = p.points[:, 1] + target_canvas_height/2 - int(h_min + (h_max - h_min) / 2)
+        p.points[:, 0] = p.points[:, 0] + target_canvas_width / \
+            2 - int(w_min + (w_max - w_min) / 2)
+        p.points[:, 1] = p.points[:, 1] + target_canvas_height / \
+            2 - int(h_min + (h_max - h_min) / 2)
 
     output_path = f"{svg_path[:-4]}_scaled.svg"
-    save_svg.save_svg(output_path, target_canvas_width, target_canvas_height, shapes, shape_groups)
+    save_svg.save_svg(output_path, target_canvas_width,
+                      target_canvas_height, shapes, shape_groups)
 
 
 def normalize_letter_size(dest_path, font, txt):
@@ -76,8 +83,9 @@ def glyph_to_cubics(face, x=0):
                 Q[2]]
 
     beziers = []
-    pt = lambda p: np.array([p.x + x, -p.y])  # Flipping here since freetype has y-up
-    last = lambda: beziers[-1][-1]
+    # Flipping here since freetype has y-up
+    def pt(p): return np.array([p.x + x, -p.y])
+    def last(): return beziers[-1][-1]
 
     def move_to(a, beziers):
         beziers.append([pt(a)])
@@ -93,7 +101,8 @@ def glyph_to_cubics(face, x=0):
     def cubic_to(a, b, c, beziers):
         beziers[-1] += [pt(a), pt(b), pt(c)]
 
-    face.glyph.outline.decompose(beziers, move_to=move_to, line_to=line_to, conic_to=conic_to, cubic_to=cubic_to)
+    face.glyph.outline.decompose(
+        beziers, move_to=move_to, line_to=line_to, conic_to=conic_to, cubic_to=cubic_to)
     beziers = [np.array(C).astype(float) for C in beziers]
     return beziers
 
@@ -122,7 +131,8 @@ def font_string_to_beziers(font, txt, size=30, spacing=1.0, merge=True, target_c
                     longest = np.max(
                         sum([[bezier.approx_arc_length(b) for b in bezier.chain_to_beziers(C)] for C in bez], []))
                     thresh = longest * 0.5
-                    bez = [bezier.subdivide_bezier_chain(C, thresh) for C in bez]
+                    bez = [bezier.subdivide_bezier_chain(
+                        C, thresh) for C in bez]
                     nctrl = np.sum([len(C) for C in bez])
                     print(nctrl)
 
@@ -151,7 +161,8 @@ def bezier_chain_to_commands(C, closed=True):
 
 
 def count_cp(file_name, font_name):
-    canvas_width, canvas_height, shapes, shape_groups = pydiffvg.svg_to_scene(file_name)
+    canvas_width, canvas_height, shapes, shape_groups = pydiffvg.svg_to_scene(
+        file_name)
     p_counter = 0
     for path in shapes:
         p_counter += path.points.shape[0]
@@ -183,7 +194,8 @@ def write_letter_svg(c, header, fontname, beziers, subdivision_thresh, dest_path
 def font_string_to_svgs(dest_path, font, txt, size=30, spacing=1.0, target_control=None, subdivision_thresh=None):
 
     fontname = os.path.splitext(os.path.basename(font))[0]
-    glyph_beziers = font_string_to_beziers(font, txt, size, spacing, merge=False, target_control=target_control)
+    glyph_beziers = font_string_to_beziers(
+        font, txt, size, spacing, merge=False, target_control=target_control)
     if not os.path.isdir(dest_path):
         os.mkdir(dest_path)
     # Compute boundig box
@@ -193,7 +205,8 @@ def font_string_to_svgs(dest_path, font, txt, size=30, spacing=1.0, target_contr
     size = rb - lt
 
     sizestr = 'width="%.1f" height="%.1f"' % (size[0], size[1])
-    boxstr = ' viewBox="%.1f %.1f %.1f %.1f"' % (lt[0], lt[1], size[0], size[1])
+    boxstr = ' viewBox="%.1f %.1f %.1f %.1f"' % (
+        lt[0], lt[1], size[0], size[1])
     header = '''<?xml version="1.0" encoding="utf-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:ev="http://www.w3.org/2001/xml-events" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" baseProfile="full" '''
     header += sizestr
@@ -204,7 +217,8 @@ def font_string_to_svgs(dest_path, font, txt, size=30, spacing=1.0, target_contr
 
     for i, (c, beziers) in enumerate(zip(txt, glyph_beziers)):
         print(f"==== {c} ====")
-        fname, path = write_letter_svg(c, header, fontname, beziers, subdivision_thresh, dest_path)
+        fname, path = write_letter_svg(
+            c, header, fontname, beziers, subdivision_thresh, dest_path)
 
         num_cp = count_cp(fname, fontname)
         print(num_cp)
@@ -259,7 +273,3 @@ if __name__ == '__main__':
         normalize_letter_size(output_path, font_path, txt)
 
         print("DONE")
-
-
-
-
