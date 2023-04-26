@@ -9,9 +9,11 @@ from shapely.geometry import Point
 from shapely.geometry.polygon import Polygon
 import torchvision.transforms as T
 from diffusers import StableDiffusionPipeline
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
 import open_clip
 from utils import *
+
 
 class SDSLoss(nn.Module):
     def __init__(self, cfg, device):
@@ -19,7 +21,7 @@ class SDSLoss(nn.Module):
         self.cfg = cfg
         self.device = device
         self.pipe = StableDiffusionPipeline.from_pretrained(cfg.diffusion.model,
-                                                       torch_dtype=torch.float16, use_auth_token=cfg.token)
+                                                            torch_dtype=torch.float16, use_auth_token=cfg.token)
         self.pipe = self.pipe.to(self.device)
         # default scheduler: PNDMScheduler(beta_start=0.00085, beta_end=0.012,
         # beta_schedule="scaled_linear", num_train_timesteps=1000)
@@ -35,16 +37,18 @@ class SDSLoss(nn.Module):
                                          max_length=self.pipe.tokenizer.model_max_length,
                                          truncation=True, return_tensors="pt")
         uncond_input = self.pipe.tokenizer([""], padding="max_length",
-                                         max_length=text_input.input_ids.shape[-1],
-                                         return_tensors="pt")
+                                           max_length=text_input.input_ids.shape[-1],
+                                           return_tensors="pt")
         with torch.no_grad():
-            text_embeddings = self.pipe.text_encoder(text_input.input_ids.to(self.device))[0]
-            uncond_embeddings = self.pipe.text_encoder(uncond_input.input_ids.to(self.device))[0]
+            text_embeddings = self.pipe.text_encoder(
+                text_input.input_ids.to(self.device))[0]
+            uncond_embeddings = self.pipe.text_encoder(
+                uncond_input.input_ids.to(self.device))[0]
         self.text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
-        self.text_embeddings = self.text_embeddings.repeat_interleave(self.cfg.batch_size, 0)
+        self.text_embeddings = self.text_embeddings.repeat_interleave(
+            self.cfg.batch_size, 0)
         del self.pipe.tokenizer
         del self.pipe.text_encoder
-
 
     def forward(self, x_aug):
         sds_loss = 0
@@ -59,25 +63,31 @@ class SDSLoss(nn.Module):
             # sample timesteps
             timestep = torch.randint(
                 low=50,
-                high=min(950, self.cfg.diffusion.timesteps) - 1,  # avoid highest timestep | diffusion.timesteps=1000
+                # avoid highest timestep | diffusion.timesteps=1000
+                high=min(950, self.cfg.diffusion.timesteps) - 1,
                 size=(latent_z.shape[0],),
                 device=self.device, dtype=torch.long)
 
             # add noise
             eps = torch.randn_like(latent_z)
             # zt = alpha_t * latent_z + sigma_t * eps
-            noised_latent_zt = self.pipe.scheduler.add_noise(latent_z, eps, timestep)
+            noised_latent_zt = self.pipe.scheduler.add_noise(
+                latent_z, eps, timestep)
 
             # denoise
-            z_in = torch.cat([noised_latent_zt] * 2)  # expand latents for classifier free guidance
+            # expand latents for classifier free guidance
+            z_in = torch.cat([noised_latent_zt] * 2)
             timestep_in = torch.cat([timestep] * 2)
             with torch.autocast(device_type="cuda", dtype=torch.float16):
-                eps_t_uncond, eps_t = self.pipe.unet(z_in, timestep, encoder_hidden_states=self.text_embeddings).sample.float().chunk(2)
+                eps_t_uncond, eps_t = self.pipe.unet(
+                    z_in, timestep, encoder_hidden_states=self.text_embeddings).sample.float().chunk(2)
 
-            eps_t = eps_t_uncond + self.cfg.diffusion.guidance_scale * (eps_t - eps_t_uncond)
+            eps_t = eps_t_uncond + self.cfg.diffusion.guidance_scale * \
+                (eps_t - eps_t_uncond)
 
             # w = alphas[timestep]^0.5 * (1 - alphas[timestep]) = alphas[timestep]^0.5 * sigmas[timestep]
-            grad_z = self.alphas[timestep]**0.5 * self.sigmas[timestep] * (eps_t - eps)
+            grad_z = self.alphas[timestep]**0.5 * \
+                self.sigmas[timestep] * (eps_t - eps)
             assert torch.isfinite(grad_z).all()
             grad_z = torch.nan_to_num(grad_z.detach().float(), 0.0, 0.0, 0.0)
 
@@ -102,7 +112,6 @@ class ToneLoss(nn.Module):
         self.im_init = im_init.permute(2, 0, 1).unsqueeze(0)
         self.init_blurred = self.blurrer(self.im_init)
 
-
     def get_scheduler(self, step=None):
         if step is not None:
             return self.dist_loss_weight * np.exp(-(1/5)*((step-300)/(20)) ** 2)
@@ -112,7 +121,7 @@ class ToneLoss(nn.Module):
     def forward(self, cur_raster, step=None):
         blurred_cur = self.blurrer(cur_raster)
         return self.mse_loss(self.init_blurred.detach(), blurred_cur) * self.get_scheduler(step)
-            
+
 
 class ConformalLoss:
     def __init__(self, parameters: EasyDict, device: torch.device, target_letter: str, shape_groups):
@@ -120,13 +129,13 @@ class ConformalLoss:
         self.target_letter = target_letter
         self.shape_groups = shape_groups
         self.faces = self.init_faces(device)
-        self.faces_roll_a = [torch.roll(self.faces[i], 1, 1) for i in range(len(self.faces))]
+        self.faces_roll_a = [torch.roll(self.faces[i], 1, 1)
+                             for i in range(len(self.faces))]
         self.device = device
 
         with torch.no_grad():
             self.angles = []
             self.reset()
-
 
     def get_angles(self, points: torch.Tensor) -> torch.Tensor:
         angles_ = []
@@ -141,7 +150,7 @@ class ConformalLoss:
             angles = torch.arccos(cosine)
             angles_.append(angles)
         return angles_
-    
+
     def get_letter_inds(self, letter_to_insert):
         for group, l in zip(self.shape_groups, self.target_letter):
             if l == letter_to_insert:
@@ -149,13 +158,15 @@ class ConformalLoss:
                 return letter_inds[0], letter_inds[-1], len(letter_inds)
 
     def reset(self):
-        points = torch.cat([point.clone().detach() for point in self.parameters.point]).to(self.device)
+        points = torch.cat([point.clone().detach()
+                           for point in self.parameters.point]).to(self.device)
         self.angles = self.get_angles(points)
 
     def init_faces(self, device: torch.device) -> torch.tensor:
         faces_ = []
         for j, c in enumerate(self.target_letter):
-            points_np = [self.parameters.point[i].clone().detach().cpu().numpy() for i in range(len(self.parameters.point))]
+            points_np = [self.parameters.point[i].clone().detach().cpu().numpy()
+                         for i in range(len(self.parameters.point))]
             start_ind, end_ind, shapes_per_letter = self.get_letter_inds(c)
             print(c, start_ind, end_ind)
             holes = []
@@ -165,8 +176,10 @@ class ConformalLoss:
             poly = poly.buffer(0)
             points_np = np.concatenate(points_np)
             faces = Delaunay(points_np).simplices
-            is_intersect = np.array([poly.contains(Point(points_np[face].mean(0))) for face in faces], dtype=np.bool)
-            faces_.append(torch.from_numpy(faces[is_intersect]).to(device, dtype=torch.int64))
+            is_intersect = np.array(
+                [poly.contains(Point(points_np[face].mean(0))) for face in faces], dtype=np.bool)
+            faces_.append(torch.from_numpy(
+                faces[is_intersect]).to(device, dtype=torch.int64))
         return faces_
 
     def __call__(self) -> torch.Tensor:
@@ -184,33 +197,84 @@ class CLIPLoss(nn.Module):
         self.render_width = 224
         self.render_height = 224
         # self.model, _, self.preprocess = open_clip.create_model_and_transforms('ViT-L-14', pretrained='laion400m_e32')
-        #self.tokenizer = open_clip.get_tokenizer('ViT-L-14')
-        self.model, _, self.preprocess = open_clip.create_model_and_transforms('ViT-g-14', pretrained='laion2b_s12b_b42k')
+        # self.tokenizer = open_clip.get_tokenizer('ViT-L-14')
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(
+            'ViT-g-14', pretrained='laion2b_s12b_b42k')
         self.tokenizer = open_clip.get_tokenizer('ViT-g-14')
-        
+
         self.model.requires_grad_(False)
         self.model.to(device)
         self.target_text = self.tokenizer(["a word of '" + target_text + "'"])
         if DUAL:
             self.init_text = self.tokenizer(["a word of '" + init_text + "'"])
-        self.transform = lambda x: torchvision.transforms.functional.affine(img=x, angle=180.0, translate=(0, 0), scale=1.0, shear=0.0, interpolation=T.InterpolationMode.BILINEAR)
-        #self.transform = lambda x: torch.rot90(x, 2, [-2, -1]) ## torch transform affine
+        self.transform = lambda x: torchvision.transforms.functional.affine(img=x, angle=180.0, translate=(
+            0, 0), scale=1.0, shear=0.0, interpolation=T.InterpolationMode.BILINEAR)
+        # self.transform = lambda x: torch.rot90(x, 2, [-2, -1]) ## torch transform affine
         self.DUAL = DUAL
         self.device = device
 
     def forward(self, img):
-        clip_loss = 0
-        img = diff_norm(img, [0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
+        sum_loss = 0.0
+        img = diff_norm(img, [0.48145466, 0.4578275, 0.40821073],
+                        [0.26862954, 0.26130258, 0.27577711])
         if self.DUAL:
-            model_out = self.model(img.to(self.device), self.init_text.to(self.device))
+            clip_loss = 0.0
+            model_out = self.model(img.to(self.device),
+                                   self.init_text.to(self.device))
             logits_per_image = model_out[0]
             logits_per_text = model_out[1]
             logits = torch.mean(logits_per_image @ logits_per_text.T)
             clip_loss = clip_loss - logits
-        model_out = self.model(self.transform(img).to(self.device), self.target_text.to(self.device))
+            sum_loss = sum_loss + clip_loss.item()
+            clip_loss.backward(retain_graph=True)
+
+        clip_loss = 0.0
+        model_out = self.model(self.transform(img).to(
+            self.device), self.target_text.to(self.device))
         logits_per_image = model_out[0]
         logits_per_text = model_out[1]
         logits = torch.mean(logits_per_image @ logits_per_text.T)
         clip_loss = clip_loss - logits
+        sum_loss = sum_loss + clip_loss.item()
         return clip_loss
 
+
+class TrOCRLoss(nn.Module):
+    def __init__(self, device, target_text, batch_size):
+        super(TrOCRLoss, self).__init__()
+        self.processor = TrOCRProcessor.from_pretrained(
+            "microsoft/trocr-base-handwritten")
+        self.model = VisionEncoderDecoderModel.from_pretrained(
+            "microsoft/trocr-base-stage1")
+        self.device = device
+        self.transform = lambda x: torchvision.transforms.functional.affine(img=x, angle=180.0, translate=(
+            0, 0), scale=1.0, shear=0.0, interpolation=T.InterpolationMode.BILINEAR)
+        # set special tokens used for creating the decoder_input_ids from the labels
+        self.model.config.decoder_start_token_id = self.processor.tokenizer.cls_token_id
+        self.model.config.pad_token_id = self.processor.tokenizer.pad_token_id
+        # make sure vocab size is set correctly
+        self.model.config.vocab_size = self.model.config.decoder.vocab_size
+        # set beam search parameters
+        self.model.config.eos_token_id = self.processor.tokenizer.sep_token_id
+        self.model.config.max_length = 64
+        self.model.config.early_stopping = True
+        self.model.config.no_repeat_ngram_size = 3
+        self.model.config.length_penalty = 2.0
+        self.model.config.num_beams = 4
+        self.model.requires_grad_(False)
+        self.model.to(device)
+        self.labels = self.processor.tokenizer(
+            target_text, padding="max_length", max_length=64).input_ids
+        # important: make sure that PAD tokens are ignored by the loss function
+        self.labels = torch.tensor(
+            [label if label != self.processor.tokenizer.pad_token_id else -100 for label in self.labels]).unsqueeze(
+            0)  # include batch size of 1
+        self.labels = self.labels.expand(batch_size, -1)
+
+    def forward(self, x):
+        labels = self.labels.to(self.device)
+        img = diff_norm(x, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+        input_dict = {"pixel_values": self.transform(img), "labels": labels}
+        outputs = self.model(**input_dict)
+        loss = outputs.loss
+        return loss
