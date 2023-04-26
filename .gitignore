@@ -1,5 +1,6 @@
 output/
 code/__pycache__/
+code/data/init
 *.mp4
 slurm-*
 TOKEN
