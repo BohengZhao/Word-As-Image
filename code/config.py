@@ -17,16 +17,20 @@ warnings.filterwarnings("ignore")
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="code/config/base.yaml")
-    parser.add_argument("--experiment", type=str, default="conformal_0.5_dist_pixel_100_kernel201")
+    parser.add_argument("--experiment", type=str,
+                        default="conformal_0.5_dist_pixel_100_kernel201")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument('--log_dir', metavar='DIR', default="output")
     parser.add_argument('--font', type=str, default="none", help="font name")
-    parser.add_argument('--semantic_concept', type=str, help="the semantic concept to insert")
-    parser.add_argument('--word', type=str, default="none", help="the text to work on")
+    parser.add_argument('--semantic_concept', type=str,
+                        help="the semantic concept to insert")
+    parser.add_argument('--word', type=str, default="none",
+                        help="the text to work on")
     parser.add_argument('--prompt_suffix', type=str, default="minimal flat 2d vector. lineal color."
                                                              " trending on artstation")
-    parser.add_argument('--optimized_letter', type=str, default="none", help="the letter in the word to optimize")
-    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--optimized_letter', type=str,
+                        default="none", help="the letter in the word to optimize")
+    parser.add_argument('--batch_size', type=int, default=5)
     parser.add_argument('--use_wandb', type=int, default=0)
     parser.add_argument('--wandb_user', type=str, default="none")
 
@@ -41,13 +45,13 @@ def parse_args():
     cfg.semantic_concept = args.semantic_concept
     cfg.word = cfg.semantic_concept if args.word == "none" else args.word
     if " " in cfg.word:
-      raise ValueError(f'no spaces are allowed')
+        raise ValueError(f'no spaces are allowed')
     cfg.caption = f"a {args.semantic_concept}. {args.prompt_suffix}"
     cfg.log_dir = f"{args.log_dir}/{args.experiment}_{cfg.word}"
     if args.optimized_letter in cfg.word:
         cfg.optimized_letter = args.optimized_letter
     else:
-      raise ValueError(f'letter should be in word')
+        raise ValueError(f'letter should be in word')
     cfg.batch_size = args.batch_size
     cfg.token = args.token
     cfg.use_wandb = args.use_wandb
