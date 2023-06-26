@@ -134,7 +134,6 @@ def font_string_to_beziers(font, txt, size=30, spacing=1.0, merge=True, target_c
                     bez = [bezier.subdivide_bezier_chain(
                         C, thresh) for C in bez]
                     nctrl = np.sum([len(C) for C in bez])
-                    print(nctrl)
 
         if merge:
             beziers += bez
@@ -166,7 +165,6 @@ def count_cp(file_name, font_name):
     p_counter = 0
     for path in shapes:
         p_counter += path.points.shape[0]
-    print(f"TOTAL CP:   [{p_counter}]")
     return p_counter
 
 
@@ -177,7 +175,6 @@ def write_letter_svg(c, header, fontname, beziers, subdivision_thresh, dest_path
     path = '<g><path d="'
     for C in beziers:
         if subdivision_thresh is not None:
-            print('subd')
             C = bezier.subdivide_bezier_chain(C, subdivision_thresh)
         cmds += bezier_chain_to_commands(C, True)
     path += cmds + '"/>\n'
@@ -216,13 +213,10 @@ def font_string_to_svgs(dest_path, font, txt, size=30, spacing=1.0, target_contr
     svg_all = header
 
     for i, (c, beziers) in enumerate(zip(txt, glyph_beziers)):
-        print(f"==== {c} ====")
         fname, path = write_letter_svg(
             c, header, fontname, beziers, subdivision_thresh, dest_path)
 
         num_cp = count_cp(fname, fontname)
-        print(num_cp)
-        print(font, c)
         # Add to global svg
         svg_all += path + '</g>\n'
 
