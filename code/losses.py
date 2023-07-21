@@ -9,10 +9,14 @@ from shapely.geometry import Point
 from shapely.geometry.polygon import Polygon
 import torchvision.transforms as T
 from diffusers import StableDiffusionPipeline
+from IF_pipe import IFPipeline
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-
+import torchvision.transforms as tvt
 import open_clip
 from utils import *
+from FontClassifier import FontSimilarityClassifier
+
+from PIL import Image
 
 
 class SDSLoss(nn.Module):
@@ -79,6 +83,9 @@ class SDSLoss(nn.Module):
             z_in = torch.cat([noised_latent_zt] * 2)
             timestep_in = torch.cat([timestep] * 2)
             with torch.autocast(device_type="cuda", dtype=torch.float16):
+                print(z_in.shape)
+                print(timestep.shape)
+                print(self.text_embeddings.shape)
                 eps_t_uncond, eps_t = self.pipe.unet(
                     z_in, timestep, encoder_hidden_states=self.text_embeddings).sample.float().chunk(2)
 
@@ -86,8 +93,9 @@ class SDSLoss(nn.Module):
                 (eps_t - eps_t_uncond)
 
             # w = alphas[timestep]^0.5 * (1 - alphas[timestep]) = alphas[timestep]^0.5 * sigmas[timestep]
-            grad_z = self.alphas[timestep]**0.5 * \
-                self.sigmas[timestep] * (eps_t - eps)
+            w = self.alphas[timestep]**0.5 * self.sigmas[timestep]
+            w = w[:, None, None, None]
+            grad_z = w * (eps_t - eps)
             assert torch.isfinite(grad_z).all()
             grad_z = torch.nan_to_num(grad_z.detach().float(), 0.0, 0.0, 0.0)
 
@@ -96,6 +104,87 @@ class SDSLoss(nn.Module):
 
         sds_loss = sds_loss.sum(1).mean()
         return sds_loss
+    
+
+class IFLoss(nn.Module):
+    def __init__(self, cfg, device, flip=True):
+        super(IFLoss, self).__init__()
+        self.cfg = cfg
+        if cfg.target_char.islower():
+            self.prompt = "A black and white image of the lower case letter " + cfg.target_char
+        else:
+            self.prompt = "A black and white image of the upper case letter " + cfg.target_char
+        self.device = device
+        self.pipe = IFPipeline.from_pretrained("DeepFloyd/IF-I-XL-v1.0", variant="fp16", torch_dtype=torch.float16)
+        self.pipe.enable_model_cpu_offload()
+        self.flip = flip
+        self.transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
+        #self.pipe = self.pipe.to(self.device)
+        # default scheduler: PNDMScheduler(beta_start=0.00085, beta_end=0.012,
+        # beta_schedule="scaled_linear", num_train_timesteps=1000)
+        self.alphas = self.pipe.scheduler.alphas_cumprod.to(self.device)
+        self.sigmas = (1 - self.pipe.scheduler.alphas_cumprod).to(self.device)
+
+    def forward(self, x_aug):
+        sds_loss = 0
+        batch_size = x_aug.shape[0]
+        if self.flip:
+            images = self.transform(x_aug)
+        else:
+            images = x_aug
+        prompt_embeds, negative_embeds = self.pipe.encode_prompt(self.prompt, do_classifier_free_guidance=True)
+        dtype = prompt_embeds.dtype
+        prompt_embeds = torch.cat([negative_embeds, prompt_embeds])
+        prompt_embeds = prompt_embeds.repeat_interleave(batch_size, 0)
+        
+        images = torch.nn.functional.interpolate(images, size=self.pipe.unet.sample_size, mode="bilinear", antialias=True)
+
+        timestep = torch.randint(50, 950, (batch_size,), device=self.device)
+        images.to(self.device)
+        intermediate_images, eps = self.pipe.prepare_intermediate_images(
+            images, timestep, batch_size, 1, dtype, self.device
+        )
+
+        z_in = torch.cat([intermediate_images] * 2) # ([10, 3, 64, 64])
+        timestep_in = torch.cat([timestep] * 2)
+        z_in = self.pipe.scheduler.scale_model_input(z_in, timestep_in)
+
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            # check dimension of unet output
+            noise_pred = self.pipe.unet(
+                z_in, timestep, encoder_hidden_states=prompt_embeds)[0]
+        guidance_scale = 100.0
+        
+        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+        noise_pred_uncond, _ = noise_pred_uncond.split(z_in.shape[1], dim=1)
+        noise_pred_text, predicted_variance = noise_pred_text.split(z_in.shape[1], dim=1)
+        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+        w = self.alphas[timestep]**0.5 * self.sigmas[timestep]
+        w = w[:, None, None, None]
+        grad_z = w * (noise_pred - eps)
+        assert torch.isfinite(grad_z).all()
+        grad_z = torch.nan_to_num(grad_z.detach().float(), 0.0, 0.0, 0.0)
+        sds_loss = grad_z.clone().to(images.device) * images
+        del grad_z
+        sds_loss = sds_loss.sum(1).mean()
+        return sds_loss
+
+
+class ContrastiveLoss(nn.Module):
+    def __init__(self, ):
+        super().__init__()
+        self.temperature = 0.07
+        # self.log_softmax = nn.LogSoftmax(dim=-1)
+        self.img_loss = nn.CrossEntropyLoss()
+        self.text_loss = nn.CrossEntropyLoss()
+
+    def forward(self, text_embeddings, image_embeddings):
+        logits = (text_embeddings @ image_embeddings.T) / self.temperature
+        ground_truth = torch.arange(logits.shape[0]).to(logits.device)
+        img_loss = self.img_loss(logits, ground_truth)
+        text_loss = self.text_loss(logits.T, ground_truth)
+        return (img_loss + text_loss) / 2
 
 
 class ToneLoss(nn.Module):
@@ -105,8 +194,9 @@ class ToneLoss(nn.Module):
         self.im_init = None
         self.cfg = cfg
         self.mse_loss = nn.MSELoss()
-        self.blurrer = torchvision.transforms.GaussianBlur(kernel_size=(cfg.loss.tone.pixel_dist_kernel_blur,
-                                                                        cfg.loss.tone.pixel_dist_kernel_blur), sigma=(cfg.loss.tone.pixel_dist_sigma))
+        self.blurrer = torchvision.transforms.GaussianBlur(
+            kernel_size=(cfg.loss.tone.pixel_dist_kernel_blur, cfg.loss.tone.pixel_dist_kernel_blur),
+            sigma=(cfg.loss.tone.pixel_dist_sigma))
 
     def set_image_init(self, im_init):
         self.im_init = im_init.permute(2, 0, 1).unsqueeze(0)
@@ -278,3 +368,68 @@ class TrOCRLoss(nn.Module):
         outputs = self.model(**input_dict)
         loss = outputs.loss
         return loss
+
+
+class FontClassLoss(nn.Module):
+    def __init__(self, device, model_state, target_text, target_font, batch_size, rotate=True) -> None:
+        super(FontClassLoss, self).__init__()
+        self.device = device
+        self.model = FontSimilarityClassifier()
+        self.model.load_state_dict(model_state)
+        self.model.eval()
+        self.model.to(device)
+        self.similarity_criterion = ContrastiveLoss()
+        self.classification_criterion = nn.CrossEntropyLoss()
+        self.target_text = target_text
+        self.target_font = target_font
+        #self.transform = lambda x: torchvision.transforms.functional.affine(img=x, angle=180.0, translate=(
+        #    0, 0), scale=1.0, shear=0.0, interpolation=T.InterpolationMode.BILINEAR)
+        self.transform = lambda x: torch.flip(x, dims=[0, 1])
+        self.tokenizer = open_clip.get_tokenizer('ViT-B-32')
+        self.font_name = self.tokenizer(target_font).expand(batch_size, -1)
+        self.label = torch.tensor(self.char_mapping(target_text)).repeat(batch_size)
+        self.rotate = rotate
+
+    def char_mapping(self, char):
+        if char.isupper():
+            return ord(char) - ord('A')
+        elif char.islower():
+            return ord(char) - ord('a') + 26 # if the number of classes is 52
+            #return ord(char) - ord('a') if number of class = 26
+
+    def forward(self, x):
+        # with torch.no_grad():
+        if self.rotate:
+            img = self.transform(x)
+        else:
+            img = x
+        img = img.to(self.device)
+        self.font_name = self.font_name.to(self.device)
+        text_embeddings, image_embeddings, classification = self.model(img, self.font_name)
+        similarity = text_embeddings@image_embeddings.T
+        self.label = self.label.to(self.device)
+        classification_loss = self.classification_criterion(classification, self.label)
+        total_loss = classification_loss
+        return total_loss
+
+
+if __name__ == '__main__':
+    '''
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    checkpoint = torch.load('/scratch/gilbreth/zhao969/FontClassifier/saved_checkpoints/checkpoint_500.pt')
+    model_state = checkpoint['model_state_dict']
+    loss = FontClassLoss(device, model_state, 'a', 'Arial')
+    demo = Image.open("/scratch/gilbreth/zhao969/FontClassifier/data/output/Zephyrean_Gust_BRK_u.png")
+    x = demo.convert('RGB')
+    # x = torch.randn(1, 3, 224, 224)
+    print(loss(x))
+    '''
+    from config import set_config
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cfg = set_config()
+    sds_loss = SDSLoss(cfg, device)
+    batch_size = 5
+    x_aug = torch.randn(batch_size, 3, 224, 224, dtype=torch.float16).to(device)
+    loss = sds_loss(x_aug)
+    print(loss)
+

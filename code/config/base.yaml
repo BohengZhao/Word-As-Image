@@ -8,14 +8,14 @@ baseline:
   trainable:
     point: true
   lr_base:
-    point: 1
+    point: 1.1
   lr:
-    lr_init: 0.002
+    lr_init: 0.02
     lr_final: 0.0008
     lr_delay_mult: 0.1
-    lr_delay_steps: 100
-  num_iter: 2000
-  render_size: 500
+    lr_delay_steps: 0
+  num_iter: 500
+  render_size: 224
   cut_size: 224
   level_of_cc: 1 # 0 - original number of cc / 1 - recommended / 2 - more control points
   seed: 0
@@ -24,26 +24,128 @@ baseline:
     timesteps: 1000
     guidance_scale: 100
   loss:
+    font_loss_weight: 0.05
     use_sds_loss: false
+    use_if_loss: false
     tone:
       use_tone_loss: false
+      use_dual_tone_loss: false
     conformal:
       use_conformal_loss: false
     use_clip_loss: true
     use_trocr_loss: false
+    use_font_loss: false
+    use_dual_font_loss: false
 
-conformal_0.5_dist_pixel_100_kernel201:
+if_loss:
   parent_config: baseline
-  level_of_cc: 1
+  level_of_cc: 2
   loss:
+    use_font_loss: false
+    font_loss_weight: 0.05
+    use_clip_loss: false
+    use_trocr_loss: false
+    use_sds_loss: false
+    use_dual_font_loss: false
+    use_if_loss: true
     tone:
       use_tone_loss: false
+    conformal:
+      use_conformal_loss: false
+
+if_loss_upgrade:
+  parent_config: baseline
+  level_of_cc: 2
+  loss:
+    use_font_loss: false
+    font_loss_weight: 0.05
+    use_clip_loss: false
+    use_trocr_loss: false
+    use_sds_loss: false
+    use_dual_font_loss: false
+    use_if_loss: true
+    tone:
+      use_tone_loss: true
+      use_dual_tone_loss: false
+      dist_loss_weight: 1.0
+      pixel_dist_kernel_blur: 151
+      pixel_dist_sigma: 30
+    conformal:
+      use_conformal_loss: true
+      angeles_w: 0.3
+
+font_loss:
+  parent_config: baseline
+  level_of_cc: 2
+  loss:
+    use_font_loss: true
+    font_loss_weight: 0.05
+    use_clip_loss: false
+    use_trocr_loss: false
+    use_sds_loss: false
+    use_dual_font_loss: false
+    tone:
+      use_tone_loss: false
+    conformal:
+      use_conformal_loss: false
+
+font_loss_upgrade:
+  parent_config: baseline
+  level_of_cc: 2
+  loss:
+    use_font_loss: true
+    font_loss_weight: 0.05
+    use_clip_loss: false
+    use_trocr_loss: false
+    use_dual_font_loss: false
+    tone:
+      use_tone_loss: true
+      use_dual_tone_loss: false
+      dist_loss_weight: 1.0
+      pixel_dist_kernel_blur: 151
+      pixel_dist_sigma: 30
+    conformal:
+      use_conformal_loss: true
+      angeles_w: 0.3
+
+dual_font_loss:
+  parent_config: baseline
+  level_of_cc: 2
+  loss:
+    use_font_loss: false
+    use_clip_loss: false
+    use_trocr_loss: false
+    use_dual_font_loss: true
+    dual_font_loss_weight: 0.3
+    tone:
+      use_tone_loss: true
       dist_loss_weight: 100
       pixel_dist_kernel_blur: 201
       pixel_dist_sigma: 30
     conformal:
       use_conformal_loss: true
       angeles_w: 0.3
+
+dual_tone_loss:
+  parent_config: baseline
+  level_of_cc: 2
+  loss:
+    font_loss_weight: 1000.0
+    use_font_loss: true
+    use_clip_loss: false
+    use_trocr_loss: false
+    use_dual_font_loss: false
+    dual_font_loss_weight: 0.3
+    tone:
+      use_tone_loss: false
+      use_dual_tone_loss: true
+      dist_loss_weight: 100
+      pixel_dist_kernel_blur: 201
+      pixel_dist_sigma: 30
+    conformal:
+      use_conformal_loss: true
+      angeles_w: 0.3
+
 
 tone_plus_conformal:
   parent_config: baseline
@@ -96,19 +198,4 @@ none:
     conformal:
       use_conformal_loss: false
       angeles_w: 0.3
-
-trocr:
-  parent_config: baseline
-  level_of_cc: 1
-  cut_size: 384
-  loss:
-    use_clip_loss: false
-    use_trocr_loss: true
-    tone:
-      use_tone_loss: false
-      dist_loss_weight: 100
-      pixel_dist_kernel_blur: 201
-      pixel_dist_sigma: 30
-    conformal:
-      use_conformal_loss: false
-      angeles_w: 0.3
+      

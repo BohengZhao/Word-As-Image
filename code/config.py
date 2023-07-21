@@ -33,6 +33,14 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=5)
     parser.add_argument('--use_wandb', type=int, default=0)
     parser.add_argument('--wandb_user', type=str, default="none")
+    parser.add_argument('--init_char', type=str, default="none")
+    parser.add_argument('--target_char', type=str, default="none")
+    #parser.add_argument('--angle_w_sweep', type=float, default=0.3)
+    #parser.add_argument('--font_loss_weight', type=float, default=100.0)
+    #parser.add_argument('--sweep_lr_base', type=float, default=1.0)
+    #parser.add_argument('--sweep_lr_init', type=float, default=0.02)
+    #parser.add_argument('--sweep_lr_final', type=float, default=0.0008)
+
 
     cfg = edict()
     args = parser.parse_args()
@@ -58,6 +66,16 @@ def parse_args():
     cfg.wandb_user = args.wandb_user
     cfg.letter = f"{args.font}_{args.optimized_letter}_scaled"
     cfg.target = f"code/data/init/{cfg.letter}"
+    cfg.init_char = args.init_char
+    cfg.target_char = args.target_char
+    cfg.init_letter = f"{args.font}_{args.target_char}_scaled"
+    cfg.init = f"code/data/init/{cfg.init_letter}"
+    
+    #cfg.angle_w_sweep = args.angle_w_sweep
+    #cfg.font_loss_weight_sweep = args.font_loss_weight
+    #cfg.sweep_lr_base = args.sweep_lr_base
+    #cfg.sweep_lr_init = args.sweep_lr_init
+    #cfg.sweep_lr_final = args.sweep_lr_init / 100.0
 
     return cfg
 
@@ -82,7 +100,7 @@ def set_config():
     del cfgs
 
     # set experiment dir
-    signature = f"{cfg.letter}_concept_{cfg.semantic_concept}_seed_{cfg.seed}"
+    signature = f"{cfg.init_char}_to_{cfg.target_char}_{cfg.experiment}"
     cfg.experiment_dir = \
         osp.join(cfg.log_dir, cfg.font, signature)
     configfile = osp.join(cfg.experiment_dir, 'config.yaml')

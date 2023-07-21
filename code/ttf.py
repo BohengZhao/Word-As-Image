@@ -14,8 +14,8 @@ reload(bezier)
 
 
 def fix_single_svg(svg_path, all_word=False):
-    target_h_letter = 90
-    target_canvas_width, target_canvas_height = 500, 500
+    target_h_letter = 180
+    target_canvas_width, target_canvas_height = 224, 224
 
     canvas_width, canvas_height, shapes, shape_groups = pydiffvg.svg_to_scene(
         svg_path)
