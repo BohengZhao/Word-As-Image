@@ -83,9 +83,6 @@ class SDSLoss(nn.Module):
             z_in = torch.cat([noised_latent_zt] * 2)
             timestep_in = torch.cat([timestep] * 2)
             with torch.autocast(device_type="cuda", dtype=torch.float16):
-                print(z_in.shape)
-                print(timestep.shape)
-                print(self.text_embeddings.shape)
                 eps_t_uncond, eps_t = self.pipe.unet(
                     z_in, timestep, encoder_hidden_states=self.text_embeddings).sample.float().chunk(2)
 
@@ -107,13 +104,16 @@ class SDSLoss(nn.Module):
     
 
 class IFLoss(nn.Module):
-    def __init__(self, cfg, device, flip=True):
+    def __init__(self, cfg, device, flip=True, prompt=None):
         super(IFLoss, self).__init__()
         self.cfg = cfg
-        if cfg.target_char.islower():
-            self.prompt = "A black and white image of the lower case letter " + cfg.target_char
+        if prompt is None:
+            if cfg.target_char.islower():
+                self.prompt = "An image of the lower case letter " + cfg.target_char
+            else:
+                self.prompt = "An image of the upper case letter " + cfg.target_char
         else:
-            self.prompt = "A black and white image of the upper case letter " + cfg.target_char
+            self.prompt = prompt
         self.device = device
         self.pipe = IFPipeline.from_pretrained("DeepFloyd/IF-I-XL-v1.0", variant="fp16", torch_dtype=torch.float16)
         self.pipe.enable_model_cpu_offload()
@@ -185,6 +185,96 @@ class ContrastiveLoss(nn.Module):
         img_loss = self.img_loss(logits, ground_truth)
         text_loss = self.text_loss(logits.T, ground_truth)
         return (img_loss + text_loss) / 2
+
+class IFLossSinglePass(nn.Module):
+    def __init__(self, cfg, device, init_prompt=None, target_prompt=None):
+        super(IFLossSinglePass, self).__init__()
+        self.cfg = cfg
+        self.init_prompt = init_prompt
+        self.target_prompt = target_prompt
+        self.device = device
+        self.pipe = IFPipeline.from_pretrained("DeepFloyd/IF-I-XL-v1.0", variant="fp16", torch_dtype=torch.float16)
+        self.pipe.enable_model_cpu_offload()
+        self.transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
+        self.alphas = self.pipe.scheduler.alphas_cumprod.to(self.device)
+        self.sigmas = (1 - self.pipe.scheduler.alphas_cumprod).to(self.device)
+        self.prompt_embeds = None
+
+    def prompt_encode(self, init_prompt, target_prompt):
+        prompt_embeds_init, negative_embeds_init = self.pipe.encode_prompt(init_prompt, do_classifier_free_guidance=True)
+        prompt_embeds_init = torch.cat([negative_embeds_init, prompt_embeds_init])
+
+        prompt_embeds_target, negative_embeds_target = self.pipe.encode_prompt(target_prompt, do_classifier_free_guidance=True)
+        prompt_embeds_target = torch.cat([negative_embeds_target, prompt_embeds_target])
+        return prompt_embeds_init, prompt_embeds_target
+
+    def forward(self, x_aug):
+        sds_loss = 0
+        x_aug_rotate = x_aug
+        x_aug_rotate = self.transform(x_aug_rotate)
+        x_aug = torch.cat([x_aug, x_aug_rotate])
+        batch_size = x_aug.shape[0]
+        dtype = None
+        if self.prompt_embeds is None:
+            prompt_embeds_init, prompt_embeds_target = self.prompt_encode(self.init_prompt, self.target_prompt)
+            prompt_embeds_init = prompt_embeds_init.repeat_interleave(batch_size//2, 0)
+            prompt_embeds_target = prompt_embeds_target.repeat_interleave(batch_size//2, 0)
+            self.prompt_embeds = torch.cat([prompt_embeds_init, prompt_embeds_target])
+            dtype = prompt_embeds_init.dtype
+        
+        images = torch.nn.functional.interpolate(x_aug, size=self.pipe.unet.sample_size, mode="bilinear", antialias=True)
+    
+        timestep = torch.randint(50, 950, (batch_size,), device=self.device)
+        images.to(self.device)
+        intermediate_images, eps = self.pipe.prepare_intermediate_images(
+            images, timestep, batch_size, 1, dtype, self.device
+        )
+        
+        z_in = torch.cat([intermediate_images[0:(batch_size//2)], intermediate_images[0:(batch_size//2)],
+                           intermediate_images[(batch_size//2):], intermediate_images[(batch_size//2):]])
+        timestep_in = torch.cat([timestep[0:(batch_size//2)], timestep[0:(batch_size//2)], 
+                                 timestep[(batch_size//2):], timestep[(batch_size//2):]])
+        z_in = self.pipe.scheduler.scale_model_input(z_in, timestep_in)
+
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            # check dimension of unet output
+            
+            noise_pred = self.pipe.unet(
+                z_in, timestep_in, encoder_hidden_states=self.prompt_embeds)[0]
+        guidance_scale = 100.0
+
+        noise_pred_init, noise_pred_target = noise_pred.chunk(2, dim=0)
+        
+        noise_pred_uncond_init, noise_pred_text_init = noise_pred_init.chunk(2)
+        noise_pred_uncond_init, _ = noise_pred_uncond_init.split(z_in.shape[1], dim=1)
+        noise_pred_text_init, predicted_variance_init = noise_pred_text_init.split(z_in.shape[1], dim=1)
+        noise_pred_init = noise_pred_uncond_init + guidance_scale * (noise_pred_text_init - noise_pred_uncond_init)
+   
+
+        w = self.alphas[timestep[0:(batch_size // 2)]]**0.5 * self.sigmas[timestep[0:(batch_size // 2)]]
+        w = w[:, None, None, None]
+        grad_z_init = w * (noise_pred_init - eps[0:(batch_size // 2)])
+        assert torch.isfinite(grad_z_init).all()
+        grad_z_init = torch.nan_to_num(grad_z_init.detach().float(), 0.0, 0.0, 0.0)
+        sds_loss_init = grad_z_init.clone().to(images.device) * images[0:(batch_size // 2)]
+        del grad_z_init
+        sds_loss_init = sds_loss_init.sum(1).mean()
+
+        noise_pred_uncond_target, noise_pred_text_target = noise_pred_target.chunk(2)
+        noise_pred_uncond_target, _ = noise_pred_uncond_target.split(z_in.shape[1], dim=1)
+        noise_pred_text_target, predicted_variance_target = noise_pred_text_target.split(z_in.shape[1], dim=1)
+        noise_pred_target = noise_pred_uncond_target + guidance_scale * (noise_pred_text_target - noise_pred_uncond_target)
+
+        w = self.alphas[timestep[(batch_size // 2):]]**0.5 * self.sigmas[timestep[(batch_size // 2):]]
+        w = w[:, None, None, None]
+        grad_z = w * (noise_pred_target - eps[(batch_size // 2):])
+        assert torch.isfinite(grad_z).all()
+        grad_z = torch.nan_to_num(grad_z.detach().float(), 0.0, 0.0, 0.0)
+        sds_loss_target = grad_z.clone().to(images.device) * images[(batch_size // 2):]
+        del grad_z
+        sds_loss_target = sds_loss_target.sum(1).mean()
+
+        return sds_loss_init, sds_loss_target
 
 
 class ToneLoss(nn.Module):

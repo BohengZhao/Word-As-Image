@@ -30,6 +30,7 @@ from diffusers.pipelines.deepfloyd_if.safety_checker import IFSafetyChecker
 from diffusers.pipelines.deepfloyd_if.watermark import IFWatermarker
 
 import torch.nn.functional as F
+from torchsummary import summary
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -1016,12 +1017,19 @@ if __name__ == "__main__":
 
     with torch.autocast(device_type="cuda", dtype=torch.float16):
         # check dimension of unet output
+        print(z_in.shape, timestep.shape, prompt_embeds.shape)
+        #torch.Size([10, 3, 64, 64]) torch.Size([5]) torch.Size([10, 77, 4096])
         noise_pred = pipe.unet(
             z_in, timestep, encoder_hidden_states=prompt_embeds)[0]
+        #print(pipe.unet)
+        #summary(pipe.unet, [(10, 3, 64, 64), (5, ), (10, 77, 4096)])
+        
     guidance_scale = 100.0
-    
+    print(noise_pred.shape)
     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+    print(noise_pred_uncond.shape)
     noise_pred_uncond, _ = noise_pred_uncond.split(z_in.shape[1], dim=1)
+    print(noise_pred_uncond.shape)
     noise_pred_text, predicted_variance = noise_pred_text.split(z_in.shape[1], dim=1)
     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
