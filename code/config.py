@@ -37,6 +37,8 @@ def parse_args():
     parser.add_argument('--target_char', type=str, default="none")
     parser.add_argument('--target_style', type=str, default="none")
     parser.add_argument('--init_style', type=str, default="none")
+    parser.add_argument('--dual_bias_weight_sweep', type=float, default=1.0)
+
     #parser.add_argument('--angle_w_sweep', type=float, default=0.3)
     #parser.add_argument('--font_loss_weight', type=float, default=100.0)
     #parser.add_argument('--sweep_lr_base', type=float, default=1.0)
@@ -74,6 +76,7 @@ def parse_args():
     cfg.init = f"code/data/init/{cfg.init_letter}"
     cfg.target_style = args.target_style
     cfg.init_style = args.init_style
+    cfg.dual_bias_weight_sweep = args.dual_bias_weight_sweep
     #cfg.angle_w_sweep = args.angle_w_sweep
     #cfg.font_loss_weight_sweep = args.font_loss_weight
     #cfg.sweep_lr_base = args.sweep_lr_base
@@ -103,7 +106,7 @@ def set_config():
     del cfgs
 
     # set experiment dir
-    signature = f"{cfg.init_char}_to_{cfg.target_char}_{cfg.experiment}_{cfg.target_style}"
+    signature = f"{cfg.init_char}_to_{cfg.target_char}_{cfg.experiment}_{cfg.target_style}_{cfg.dual_bias_weight_sweep}"
     cfg.experiment_dir = \
         osp.join(cfg.log_dir, cfg.font, signature)
     configfile = osp.join(cfg.experiment_dir, 'config.yaml')

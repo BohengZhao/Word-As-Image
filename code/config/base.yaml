@@ -28,6 +28,7 @@ baseline:
     font_loss_weight: 0.05
     use_sds_loss: false
     use_if_loss: false
+    use_dreambooth_if: false
     tone:
       use_tone_loss: false
       use_dual_tone_loss: false
@@ -50,6 +51,7 @@ dual_if:
     use_sds_loss: false
     use_dual_font_loss: false
     use_if_loss: true
+    use_dreambooth_if: false
     tone:
       use_tone_loss: false
       use_dual_tone_loss: false
@@ -60,7 +62,7 @@ dual_if:
       use_conformal_loss: false
       angeles_w: 0.3
 
-dual_if_upgrade:
+dual_if_dream:
   parent_config: baseline
   level_of_cc: 2
   loss:
@@ -71,15 +73,61 @@ dual_if_upgrade:
     use_trocr_loss: false
     use_sds_loss: false
     use_dual_font_loss: false
-    use_if_loss: true
+    use_if_loss: false
+    use_dreambooth_if: true
     tone:
-      use_tone_loss: true
+      use_tone_loss: false
       use_dual_tone_loss: false
       dist_loss_weight: 1.0
-      pixel_dist_kernel_blur: 151
-      pixel_dist_sigma: 30
+      pixel_dist_kernel_blur: 51
+      pixel_dist_sigma: 15
     conformal:
-      use_conformal_loss: true
+      use_conformal_loss: false
+      angeles_w: 0.3
+
+dual_if_font_loss:
+  parent_config: baseline
+  level_of_cc: 2
+  loss:
+    dual_bias_weight: 0.8
+    use_font_loss: false
+    font_loss_weight: 0.05
+    use_clip_loss: false
+    use_trocr_loss: false
+    use_sds_loss: false
+    use_dual_font_loss: true
+    use_if_loss: true
+    tone:
+      use_tone_loss: false
+      use_dual_tone_loss: false
+      dist_loss_weight: 1.0
+      pixel_dist_kernel_blur: 51
+      pixel_dist_sigma: 15
+    conformal:
+      use_conformal_loss: false
+      angeles_w: 0.3
+
+dual_if_font_loss_dream:
+  parent_config: baseline
+  level_of_cc: 2
+  loss:
+    dual_bias_weight: 0.8
+    use_font_loss: false
+    font_loss_weight: 0.05
+    use_clip_loss: false
+    use_trocr_loss: false
+    use_sds_loss: false
+    use_dual_font_loss: true
+    use_if_loss: false
+    use_dreambooth_if: true
+    tone:
+      use_tone_loss: false
+      use_dual_tone_loss: false
+      dist_loss_weight: 1.0
+      pixel_dist_kernel_blur: 51
+      pixel_dist_sigma: 15
+    conformal:
+      use_conformal_loss: false
       angeles_w: 0.3
 
 if_loss_upgrade:

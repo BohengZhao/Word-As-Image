@@ -15,6 +15,7 @@ import torchvision.transforms as tvt
 import open_clip
 from utils import *
 from FontClassifier import FontSimilarityClassifier
+from diffusers import UNet2DConditionModel
 
 from PIL import Image
 
@@ -187,13 +188,17 @@ class ContrastiveLoss(nn.Module):
         return (img_loss + text_loss) / 2
 
 class IFLossSinglePass(nn.Module):
-    def __init__(self, cfg, device, init_prompt=None, target_prompt=None):
+    def __init__(self, cfg, device, init_prompt=None, target_prompt=None, unet_path=None):
         super(IFLossSinglePass, self).__init__()
         self.cfg = cfg
         self.init_prompt = init_prompt
         self.target_prompt = target_prompt
         self.device = device
-        self.pipe = IFPipeline.from_pretrained("DeepFloyd/IF-I-XL-v1.0", variant="fp16", torch_dtype=torch.float16)
+        if unet_path is None:
+            self.pipe = IFPipeline.from_pretrained("DeepFloyd/IF-I-XL-v1.0", variant="fp16", torch_dtype=torch.float16)
+        else:
+            unet = UNet2DConditionModel.from_pretrained(unet_path)
+            self.pipe = IFPipeline.from_pretrained("DeepFloyd/IF-I-XL-v1.0", unet=unet, variant="fp16", torch_dtype=torch.float16)
         self.pipe.enable_model_cpu_offload()
         self.transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
         self.alphas = self.pipe.scheduler.alphas_cumprod.to(self.device)
@@ -496,12 +501,12 @@ class FontClassLoss(nn.Module):
         img = img.to(self.device)
         self.font_name = self.font_name.to(self.device)
         text_embeddings, image_embeddings, classification = self.model(img, self.font_name)
-        similarity = text_embeddings@image_embeddings.T
+        similarity = text_embeddings @ image_embeddings.T
         self.label = self.label.to(self.device)
         classification_loss = self.classification_criterion(classification, self.label)
         total_loss = classification_loss
-        return total_loss
-
+        #return total_loss
+        return classification_loss, torch.diagonal(similarity).sum()
 
 if __name__ == '__main__':
     '''

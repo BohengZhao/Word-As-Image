@@ -92,6 +92,12 @@ if __name__ == "__main__":
         #pipe = IFPipeline.from_pretrained("DeepFloyd/IF-I-XL-v1.0", variant="fp32", torch_dtype=torch.float32)
         #del pipe
         if_loss = IFLossSinglePass(cfg, device, init_prompt=prompt_init, target_prompt=prompt_target)
+    
+    if cfg.loss.use_dreambooth_if:
+        unet_path = "/scratch/gilbreth/zhao969/diffusers/examples/dreambooth/h_and_y/checkpoint-1000/unet"
+        prompt_init = "an image of sks letter h in lower case"
+        prompt_target = "an image of sks letter y in lower case"
+        if_loss = IFLossSinglePass(cfg, device, init_prompt=prompt_init, target_prompt=prompt_target, unet_path=unet_path)
 
     if cfg.loss.use_font_loss:
         #checkpoint = torch.load('/home/zhao969/Documents/saved_checkpoints/checkpoint_500.pt')
@@ -103,8 +109,8 @@ if __name__ == "__main__":
         #checkpoint = torch.load('/home/zhao969/Documents/saved_checkpoints/checkpoint_500.pt')
         checkpoint = torch.load('/scratch/gilbreth/zhao969/FontClassifier/saved_checkpoints/case_sensitive_checkpoint_20.pt')
         model_state = checkpoint['model_state_dict']
-        font_loss_rotate = FontClassLoss(device, model_state, cfg.target_char, 'arial', batch_size=cfg.batch_size)
-        font_loss_normal = FontClassLoss(device, model_state, cfg.init_char, 'arial',
+        font_loss_rotate = FontClassLoss(device, model_state, cfg.target_char, 'Arial', batch_size=cfg.batch_size)
+        font_loss_normal = FontClassLoss(device, model_state, cfg.init_char, 'Arial',
                                          batch_size=cfg.batch_size, rotate=False)
 
     h, w = cfg.render_size, cfg.render_size
@@ -227,23 +233,33 @@ if __name__ == "__main__":
         x_aug = tvt.functional.invert(data_augs.forward(tvt.functional.invert(x))
                                       )  # perform data aug with black background
 
-        if cfg.loss.use_font_loss:
-            loss = font_loss.forward(x_aug) * cfg.loss.font_loss_weight
-            #loss = font_loss.forward(x_aug) * cfg.font_loss_weight_sweep
-
-        if cfg.loss.use_dual_font_loss:
-            loss = font_loss_rotate.forward(x_aug)
-            loss = loss + font_loss_normal.forward(x_aug) * cfg.loss.dual_font_loss_weight
+        
 
         if cfg.use_wandb and cfg.loss.use_font_loss:
             wandb.log({"font_loss": loss.item()}, step=step)
 
-        if cfg.loss.use_if_loss:
+        if cfg.loss.use_if_loss or cfg.loss.use_dreambooth_if:
             loss_init, loss_target = if_loss(x_aug)
             #loss = loss_target
-            loss = loss_init + loss_target 
+            loss = loss_init * (1 - cfg.dual_bias_weight_sweep) + loss_target * cfg.dual_bias_weight_sweep
             if cfg.use_wandb:
                 wandb.log({"IF_sds_loss": loss.item()}, step=step)
+
+        if cfg.loss.use_font_loss:
+            loss = loss +  font_loss.forward(x_aug) * cfg.loss.font_loss_weight
+            #loss = font_loss.forward(x_aug) * cfg.font_loss_weight_sweep
+
+        if cfg.loss.use_dual_font_loss:
+            classification_loss = font_loss_rotate.forward(x_aug)[0] + font_loss_normal.forward(x_aug)[0] #* cfg.loss.dual_font_loss_weight
+            classification_loss = classification_loss * torch.exp(-0.5 * torch.tensor(step)) * 0.001
+            loss = loss + classification_loss 
+
+            font_loss = font_loss_rotate.forward(x_aug)[1] + font_loss_normal.forward(x_aug)[1]
+            font_loss = font_loss * torch.exp(-0.1 * torch.tensor(step))
+            loss = loss - font_loss 
+            if cfg.use_wandb:
+                wandb.log({"classification_loss": classification_loss.item()}, step=step)
+                wandb.log({"font_loss": font_loss.item()}, step=step)
 
         if cfg.loss.tone.use_tone_loss:
             tone_target_loss = tone_loss_target(x, step)
