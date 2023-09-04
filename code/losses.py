@@ -425,8 +425,9 @@ class CLIPLoss(nn.Module):
 
 
 class TrOCRLoss(nn.Module):
-    def __init__(self, device, target_text, batch_size):
+    def __init__(self, device, target_text, batch_size, rotate=False):
         super(TrOCRLoss, self).__init__()
+        self.flip = rotate
         self.processor = TrOCRProcessor.from_pretrained(
             "microsoft/trocr-base-handwritten")
         self.model = VisionEncoderDecoderModel.from_pretrained(
@@ -447,6 +448,7 @@ class TrOCRLoss(nn.Module):
         self.model.config.length_penalty = 2.0
         self.model.config.num_beams = 4
         self.model.requires_grad_(False)
+        self.model.eval()
         self.model.to(device)
         self.labels = self.processor.tokenizer(
             target_text, padding="max_length", max_length=64).input_ids
@@ -455,9 +457,12 @@ class TrOCRLoss(nn.Module):
             [label if label != self.processor.tokenizer.pad_token_id else -100 for label in self.labels]).unsqueeze(
             0)  # include batch size of 1
         self.labels = self.labels.expand(batch_size, -1)
+        self.transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
 
     def forward(self, x):
         labels = self.labels.to(self.device)
+        if self.flip:
+            x = self.transform(x)
         img = diff_norm(x, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
         input_dict = {"pixel_values": self.transform(img), "labels": labels}
         outputs = self.model(**input_dict)
@@ -479,7 +484,7 @@ class FontClassLoss(nn.Module):
         self.target_font = target_font
         #self.transform = lambda x: torchvision.transforms.functional.affine(img=x, angle=180.0, translate=(
         #    0, 0), scale=1.0, shear=0.0, interpolation=T.InterpolationMode.BILINEAR)
-        self.transform = lambda x: torch.flip(x, dims=[0, 1])
+        self.transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
         self.tokenizer = open_clip.get_tokenizer('ViT-B-32')
         self.font_name = self.tokenizer(target_font).expand(batch_size, -1)
         self.label = torch.tensor(self.char_mapping(target_text)).repeat(batch_size)

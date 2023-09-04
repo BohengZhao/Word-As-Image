@@ -20,8 +20,10 @@ from config import set_config
 from utils import (
     check_and_create_dir,
     get_data_augs,
+    alignment,
     save_image,
     preprocess,
+    combine_svgs,
     learning_rate_decay,
     combine_word,
     create_video)
@@ -30,6 +32,11 @@ import warnings
 import torchvision.transforms as tvt
 import torchvision
 from IF_pipe import IFPipeline
+from StyleClassifier import DiscriminatorWithClassifier
+import random
+from PIL import Image
+import torch.nn.functional as F
+import string
 
 warnings.filterwarnings("ignore")
 
@@ -58,6 +65,9 @@ def init_shapes(svg_path, trainable: Mapping[str, bool]):
 if __name__ == "__main__":
 
     cfg = set_config()
+    rare_tokens = ["nips" ,"rune" ,"pafc" ,"nlwx" ,"fck", "cae", "sohn" ,"dori"
+                ,"zawa", "revs", "hmv", "whoo", "asar", "blob", "emp", "kilt", 
+                "ulf", "loeb", "bnha", "gote", "omd", "adl", "shld" , "waj", "sown" ,"rcn"]
 
     # use GPU if available
     pydiffvg.set_use_gpu(torch.cuda.is_available())
@@ -65,7 +75,7 @@ if __name__ == "__main__":
 
     print("preprocessing")
     word = "abcdefghijklmnopqrstuvwxyz" + "abcdefghijklmnopqrstuvwxyz".upper()
-    preprocess(cfg.font, word, cfg.optimized_letter, cfg.level_of_cc)
+    # preprocess(cfg.font, word, cfg.optimized_letter, cfg.level_of_cc)
 
     if cfg.loss.use_if_loss:
         if cfg.init_char.islower():
@@ -94,9 +104,19 @@ if __name__ == "__main__":
         if_loss = IFLossSinglePass(cfg, device, init_prompt=prompt_init, target_prompt=prompt_target)
     
     if cfg.loss.use_dreambooth_if:
-        unet_path = "/scratch/gilbreth/zhao969/diffusers/examples/dreambooth/h_and_y/checkpoint-1000/unet"
-        prompt_init = "an image of sks letter h in lower case"
-        prompt_target = "an image of sks letter y in lower case"
+        unet_path = "/scratch/gilbreth/zhao969/diffusers/examples/dreambooth/multi_instance_grey/checkpoint-1000/unet"
+        if cfg.init_char.islower():
+            prompt_init = f"an image of {rare_tokens[string.ascii_lowercase.index(cfg.init_char)]} letter {cfg.init_char} in lower case"
+        else:
+            prompt_init = f"an image of letter {cfg.init_char} in upper case"
+        if cfg.init_style != "none":
+            prompt_init = prompt_init + f" in {cfg.init_style} style"
+        if cfg.target_char.islower():
+            prompt_target = f"an image of {rare_tokens[string.ascii_lowercase.index(cfg.target_char)]} letter {cfg.target_char} in lower case"
+        else:
+            prompt_target = f"an image of letter {cfg.target_char} in upper case"
+        if cfg.target_style != "none":
+            prompt_target = prompt_target + f" in {cfg.target_style} style"
         if_loss = IFLossSinglePass(cfg, device, init_prompt=prompt_init, target_prompt=prompt_target, unet_path=unet_path)
 
     if cfg.loss.use_font_loss:
@@ -105,13 +125,39 @@ if __name__ == "__main__":
         model_state = checkpoint['model_state_dict']
         font_loss = FontClassLoss(device, model_state, cfg.target_char, 'arial', batch_size=cfg.batch_size, rotate=True)
 
-    if cfg.loss.use_dual_font_loss:
+    if cfg.loss.use_dual_font_loss or cfg.tuning.font_loss:
         #checkpoint = torch.load('/home/zhao969/Documents/saved_checkpoints/checkpoint_500.pt')
         checkpoint = torch.load('/scratch/gilbreth/zhao969/FontClassifier/saved_checkpoints/case_sensitive_checkpoint_20.pt')
         model_state = checkpoint['model_state_dict']
         font_loss_rotate = FontClassLoss(device, model_state, cfg.target_char, 'Arial', batch_size=cfg.batch_size)
         font_loss_normal = FontClassLoss(device, model_state, cfg.init_char, 'Arial',
                                          batch_size=cfg.batch_size, rotate=False)
+        
+    if cfg.loss.use_font_classifier:
+        style_image_path = "/scratch/gilbreth/zhao969/Word-As-Image/code/data/selected_font_img/Quarterly"
+        import torchvision.transforms as T
+        load_epoch = 500
+        checkpoint_dir = "/scratch/gilbreth/zhao969/Attr2Font/experiments/att2font_en/checkpoint"
+        discriminator = DiscriminatorWithClassifier()
+        dis_file = os.path.join(checkpoint_dir, f"D_{load_epoch}.pth")
+        discriminator.load_state_dict(torch.load(dis_file))
+        discriminator = discriminator.to(device)
+        font_classifier_criterion = torch.nn.MSELoss()
+        style_transform = []
+        style_transform.append(T.Resize(64))
+        style_transform.append(T.ToTensor())
+        style_transform.append(T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
+        style_transform = T.Compose(style_transform)
+        # style_images = random.sample(os.listdir(style_image_path), cfg.batch_size)
+        # transform = []
+        # transform.append(T.Resize(64))
+        # transform.append(T.ToTensor())
+        # transform.append(T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
+        # transform = T.Compose(transform)
+        # style_image_tensor = []
+        # for image in style_images:
+        #     style_image_tensor.append(transform(Image.open(os.path.join(style_image_path, image)).convert('RGB')))
+        # style_image_batch = torch.stack(style_image_tensor)
 
     h, w = cfg.render_size, cfg.render_size
 
@@ -143,6 +189,15 @@ if __name__ == "__main__":
         torch.ones(img_init_init.shape[0], img_init_init.shape[1],
                     3, device=device) * (1 - img_init_init[:, :, 3:4])
     img_init_init = img_init_init[:, :, :3]
+
+    if cfg.alignment == 'overlap':
+        shift_x = alignment(img_init, img_init_init, mode='overlap')
+    elif cfg.alignment == 'contact':
+        shift_x = alignment(img_init, img_init_init, mode='contact')
+    elif cfg.alignment == 'seperated':
+        shift_x = alignment(img_init, img_init_init, mode='seperated')
+    else:
+        shift_x = 0
 
     if cfg.use_wandb:
         plt.imshow(img_init.detach().cpu())
@@ -213,7 +268,11 @@ if __name__ == "__main__":
         transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
 
         #img = transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0)
-        img = torch.min(img, transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0))
+        # img = torch.min(img, transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0))
+        #shift_x = alignment(img, img_init_init, mode='overlap')
+        #img = torch.min(torch.roll(img, -(shift_x // 2), 1), torch.roll(transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0), shift_x // 2, 1))
+        if shift_x != 0:
+            img = torch.min(torch.roll(img, -(shift_x // 2), 1), torch.roll(transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0), shift_x // 2, 1))
 
         if cfg.save.video and (step % cfg.save.video_frame_freq == 0 or step == num_iter - 1):
             save_image(img, os.path.join(cfg.experiment_dir,
@@ -281,6 +340,21 @@ if __name__ == "__main__":
                 wandb.log({"loss_angles": loss_angles}, step=step)
             loss = loss + loss_angles
 
+        if cfg.loss.use_font_classifier:
+            style_images = random.sample(os.listdir(style_image_path), cfg.batch_size)
+            style_image_tensor = []
+            for image in style_images:
+                style_image_tensor.append(style_transform(Image.open(os.path.join(style_image_path, image)).convert('RGB')))
+            style_image_batch = torch.stack(style_image_tensor)
+            dummy_class = torch.LongTensor(cfg.batch_size * [3]).to(device).to(device)
+            dummy_intensity = torch.LongTensor(cfg.batch_size * [2]).to(device)
+            resize_x_aug = F.interpolate(x_aug, size=64, mode='bilinear', antialias=True)
+            _, style_image_pred, style_gen_pred = discriminator(style_image_batch.to(device), resize_x_aug, dummy_class, dummy_intensity)
+            font_classifier_loss = font_classifier_criterion(style_gen_pred, style_image_pred)
+            loss = loss + font_classifier_loss * (1.0 + 3.0 * torch.exp(-0.005 * torch.tensor(step))) # * torch.exp(-0.005 * torch.tensor(step)) * 2.0 
+            if cfg.use_wandb:
+                wandb.log({"font_classifier_loss": font_classifier_loss.item()}, step=step)
+
         t_range.set_postfix({'loss': loss.item()})
         loss.backward()
         optim.step()
@@ -297,12 +371,21 @@ if __name__ == "__main__":
     check_and_create_dir(filename)
     save_svg.save_svg(
         filename, w, h, shapes_init, shape_groups_init)
+    
+    combine_svgs(os.path.join(cfg.experiment_dir, "output-svg", "output_1.svg"), 
+                 os.path.join(cfg.experiment_dir, "output-svg", "output_2.svg"), 
+                 shift_x, w, h)
 
     #combine_word(cfg.word, cfg.optimized_letter, cfg.font, cfg.experiment_dir)
 
     if cfg.save.image:
+        hyper_classification_loss = torch.tensor(0.0)
+        if cfg.tuning.font_loss:
+            hyper_classification_rotate_loss = font_loss_rotate.forward(x_aug)[0]
+            hyper_classification_normal_loss = font_loss_normal.forward(x_aug)[0]
+            hyper_classification_loss = hyper_classification_rotate_loss + hyper_classification_normal_loss
         filename = os.path.join(
-            cfg.experiment_dir, "output-png", "output.png")
+            cfg.experiment_dir, "output-png", f"{hyper_classification_loss.item()}_output.png")
         check_and_create_dir(filename)
         imshow = img.detach().cpu()
         pydiffvg.imwrite(imshow, filename, gamma=gamma)

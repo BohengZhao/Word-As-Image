@@ -11,7 +11,8 @@ import torch
 import numpy as np
 import torchvision.transforms.functional as F
 import torchvision.transforms as transforms
-
+import torchvision
+import matplotlib.pyplot as plt
 
 def edict_2_dict(x):
     if isinstance(x, dict):
@@ -234,7 +235,87 @@ def diff_norm(input, mean, std):
                 input[i, j] = (input[i, j] - mean[j]) / std[j]
     return input
 
-
 def augment(image):
     image = transforms.RandomAffine(degrees=10, translate=(0.2, 0.2), scale=(0.9, 1.1), fill=0)(image)
     return image
+
+def alignment(mask1, mask2, mode='overlap'):
+    if mode == 'overlap':
+        highest = 0
+        shift = 0
+        transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
+        mask2 = transform(mask2.permute(2, 0, 1)).permute(1, 2, 0)
+        for i in range(-100, 100, 1):
+            new_mask2 = torch.roll(mask2, i, 1)
+            overlap_sum = torch.einsum('ijk,ijk->ij', mask1, new_mask2).unsqueeze(2).sum()
+            if overlap_sum > highest:
+                highest = overlap_sum
+                shift = i
+        return shift
+    elif mode == 'seperated':
+        lowest = float('inf')
+        shift = float('inf')
+        transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
+        mask2 = transform(mask2.permute(2, 0, 1)).permute(1, 2, 0)
+        for i in range(-100, 100, 1):
+            new_mask2 = torch.roll(mask2, i, 1)
+            overlap_sum = torch.einsum('ijk,ijk->ij', mask1, new_mask2).unsqueeze(2).sum()
+            if overlap_sum <= lowest and abs(i) < abs(shift):
+                lowest = overlap_sum
+                shift = i
+        return shift
+    elif mode == 'contact':
+        lowest = float('inf')
+        shift = float('inf')
+        transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
+        mask2 = transform(mask2.permute(2, 0, 1)).permute(1, 2, 0)
+        for i in range(-100, 100, 1):
+            new_mask2 = torch.roll(mask2, i, 1)
+            overlap_sum = torch.einsum('ijk,ijk->ij', mask1, new_mask2).unsqueeze(2).sum()
+            if overlap_sum <= lowest and abs(i) < abs(shift):
+                lowest = overlap_sum
+                shift = i
+        shift = shift // 2
+        return shift
+    
+def combine_svgs(file_1, file_2, shift_x, w=224, h=224):
+    import svgutils
+    svg = svgutils.transform.fromfile(file_2)
+    originalSVG = svgutils.compose.SVG(file_2)
+    originalSVG.rotate(180, 112, 112)
+    originalSVG.move(shift_x // 2, 0)
+    figure = svgutils.compose.Figure(svg.height, svg.width, originalSVG)
+    figure.save(file_2)
+
+    svg = svgutils.transform.fromfile(file_1)
+    originalSVG = svgutils.compose.SVG(file_1)
+    originalSVG.move(-(shift_x // 2), 0)
+    figure = svgutils.compose.Figure(svg.height, svg.width, originalSVG)
+    figure.save(file_1)
+
+    canvas_width, canvas_height, shapes_init, shape_groups_init = pydiffvg.svg_to_scene(
+        file_1)
+    scene_args = pydiffvg.RenderFunction.serialize_scene(
+        224, 224, shapes_init, shape_groups_init)
+    save_svg.save_svg(file_1, w, h, shapes_init, shape_groups_init)
+
+    canvas_width, canvas_height, shapes_init, shape_groups_init = pydiffvg.svg_to_scene(
+        file_2)
+    scene_args = pydiffvg.RenderFunction.serialize_scene(
+        224, 224, shapes_init, shape_groups_init)
+    save_svg.save_svg(file_2, w, h, shapes_init, shape_groups_init)
+
+    import svgutils.transform as sg
+    #create new SVG figure
+    fig = sg.SVGFigure(svg.height, svg.width)
+    # load matpotlib-generated figures
+    fig1 = sg.fromfile(file_1)
+    fig2 = sg.fromfile(file_2)
+    # get the plot objects
+    plot1 = fig1.getroot()
+    plot2 = fig2.getroot()
+    # add text labels
+    # append plots and labels to figure
+    fig.append([plot1, plot2])
+    # save generated SVG files
+    fig.save(os.path.join(os.path.dirname(file_1), "output.svg"))
