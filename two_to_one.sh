@@ -8,11 +8,11 @@ WANDB_USER="zhao969"
 # tone_plus_conformal, tone, conformal, none, trocr, font_loss, font_loss_upgrade, dual_font_loss
 EXPERIMENT=dual_if # _dream # _font_style
 
-WORD=E # No effect for this experiment
+WORD=TEST # No effect for this experiment
 #TARGET=e
-TARGETS=("a")
+TARGETS=("l")
 #TARGETS=("y" "h" "l")
-letter_=("a")
+letter_=("s")
 fonts=(Quicksand)   # (IndieFlower-Regular)
 #styles=(Arial Curly Artistic Plain)
 styles=(plain)
@@ -32,7 +32,7 @@ do
                     echo "$i"
                     font_name=$j
                     ARGS="--experiment $EXPERIMENT --optimized_letter ${i} --seed $SEED --font ${font_name} --use_wandb ${USE_WANDB} --wandb_user ${WANDB_USER} --init_char ${i} --target_char ${target}"
-                    CUDA_VISIBLE_DEVICES=0 python code/main_dual.py $ARGS --word "${WORD}" --dual_bias_weight_sweep "${weight}" --alignment "${align}" # --post_processing "else"
+                    CUDA_VISIBLE_DEVICES=0 python code/main_dual_two_char.py $ARGS --word "${WORD}" --dual_bias_weight_sweep "${weight}" --alignment "${align}" # --post_processing "else"
                 done
             done
         done

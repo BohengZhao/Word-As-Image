@@ -11,8 +11,10 @@ import matplotlib.pyplot as plt
 class ImageEncoder(torch.nn.Module):
     def __init__(self):
         super(ImageEncoder, self).__init__()
+        # self.net_config = myconfig.read_yaml(
+        #     '/scratch/gilbreth/zhao969/FontClassifier/config/config.yaml')[1]
         self.net_config = myconfig.read_yaml(
-            '/scratch/gilbreth/zhao969/FontClassifier/config/config.yaml')[1]
+            '/home/zhao969/Documents/saved_checkpoints/config.yaml')[1]
         self.resnet = antialiased_cnns.resnet50(pretrained=True)
         self.resnet_end = nn.Sequential(*list(self.resnet.children())[:-1])
         if self.net_config['Number_of_Classes'] == 52:

@@ -22,12 +22,8 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument('--log_dir', metavar='DIR', default="output")
     parser.add_argument('--font', type=str, default="none", help="font name")
-    parser.add_argument('--semantic_concept', type=str,
-                        help="the semantic concept to insert")
     parser.add_argument('--word', type=str, default="none",
                         help="the text to work on")
-    parser.add_argument('--prompt_suffix', type=str, default="minimal flat 2d vector. lineal color."
-                                                             " trending on artstation")
     parser.add_argument('--optimized_letter', type=str,
                         default="none", help="the letter in the word to optimize")
     parser.add_argument('--batch_size', type=int, default=5)
@@ -35,11 +31,10 @@ def parse_args():
     parser.add_argument('--wandb_user', type=str, default="none")
     parser.add_argument('--init_char', type=str, default="none")
     parser.add_argument('--target_char', type=str, default="none")
-    parser.add_argument('--target_style', type=str, default="none")
-    parser.add_argument('--init_style', type=str, default="none")
     parser.add_argument('--alignment', type=str, default="none")
     parser.add_argument('--dual_bias_weight_sweep', type=float, default=1.0)
-
+    parser.add_argument('--post_processing', type=str, default="dual-svg")
+    parser.add_argument('--word_group', type=int, default=0)
     #parser.add_argument('--angle_w_sweep', type=float, default=0.3)
     #parser.add_argument('--font_loss_weight', type=float, default=100.0)
     #parser.add_argument('--sweep_lr_base', type=float, default=1.0)
@@ -55,16 +50,9 @@ def parse_args():
     cfg.experiment = args.experiment
     cfg.seed = args.seed
     cfg.font = args.font
-    cfg.semantic_concept = args.semantic_concept
-    cfg.word = cfg.semantic_concept if args.word == "none" else args.word
-    if " " in cfg.word:
-        raise ValueError(f'no spaces are allowed')
-    cfg.caption = f"a {args.semantic_concept}. {args.prompt_suffix}"
+    cfg.word = args.word
     cfg.log_dir = f"{args.log_dir}/{args.experiment}_{cfg.word}"
-    if args.optimized_letter in cfg.word:
-        cfg.optimized_letter = args.optimized_letter
-    else:
-        raise ValueError(f'letter should be in word')
+    cfg.optimized_letter = args.optimized_letter
     cfg.batch_size = args.batch_size
     cfg.token = args.token
     cfg.use_wandb = args.use_wandb
@@ -75,10 +63,11 @@ def parse_args():
     cfg.target_char = args.target_char
     cfg.init_letter = f"{args.font}_{args.target_char}_scaled"
     cfg.init = f"code/data/init/{cfg.init_letter}"
-    cfg.target_style = args.target_style
-    cfg.init_style = args.init_style
     cfg.dual_bias_weight_sweep = args.dual_bias_weight_sweep
     cfg.alignment = args.alignment
+    cfg.post_processing = args.post_processing
+    cfg.word_group = args.word_group
+    
     #cfg.angle_w_sweep = args.angle_w_sweep
     #cfg.font_loss_weight_sweep = args.font_loss_weight
     #cfg.sweep_lr_base = args.sweep_lr_base
@@ -108,16 +97,23 @@ def set_config():
     del cfgs
 
     # set experiment dir
-    signature = f"{cfg.init_char}_to_{cfg.target_char}_{cfg.experiment}_{cfg.alignment}_{cfg.dual_bias_weight_sweep}"
-    cfg.experiment_dir = \
-        osp.join(cfg.log_dir, cfg.font, signature)
-    configfile = osp.join(cfg.experiment_dir, 'config.yaml')
-    print('Config:', cfg)
+    if cfg.word == "none":
+        signature = f"{cfg.init_char}_to_{cfg.target_char}_{cfg.experiment}_{cfg.alignment}" #_{cfg.dual_bias_weight_sweep}
+        cfg.experiment_dir = \
+            osp.join(cfg.log_dir, cfg.font, signature)
+        configfile = osp.join(cfg.experiment_dir, 'config.yaml')
+        print('Config:', cfg)
+    else:
+        signature = f"whole_word_opt_{cfg.word_group}" #_{cfg.dual_bias_weight_sweep}
+        cfg.experiment_dir = \
+            osp.join(cfg.log_dir, cfg.font, signature)
+        configfile = osp.join(cfg.experiment_dir, 'config.yaml')
+        print('Config:', cfg)
 
     # create experiment dir and save config
-    check_and_create_dir(configfile)
-    with open(osp.join(configfile), 'w') as f:
-        yaml.dump(edict_2_dict(cfg), f)
+    # check_and_create_dir(configfile)
+    # with open(osp.join(configfile), 'w') as f:
+    #     yaml.dump(edict_2_dict(cfg), f)
 
     if cfg.use_wandb:
         wandb.init(project="Word-As-Image", entity=cfg.wandb_user,
@@ -127,6 +123,7 @@ def set_config():
         random.seed(cfg.seed)
         npr.seed(cfg.seed)
         torch.manual_seed(cfg.seed)
+        # torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.benchmark = False
     else:
         assert False

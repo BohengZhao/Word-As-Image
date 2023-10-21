@@ -71,6 +71,7 @@ if __name__ == "__main__":
                 "ulf", "loeb", "bnha", "gote", "omd", "adl", "shld" , "waj", "sown" ,"rcn"]
     # weight_sweep_list = [0.4, 0.45, 0.5, 0.55, 0.6]
     weight_sweep_list = [0.3, 0.4, 0.5, 0.6, 0.7]
+    weight_sweep_list = [0.35, 0.38, 0.42, 0.45]
     # use GPU if available
     pydiffvg.set_use_gpu(torch.cuda.is_available())
     device = pydiffvg.get_device()
@@ -106,25 +107,9 @@ if __name__ == "__main__":
         
         prompt_init = prompt_pre_init + cfg.init_char #+ "in curly font style"
         prompt_target = prompt_pre_target + cfg.target_char #+ "in curly font style"
+        prompt_init = "An image of the text \'ls\'"
+        prompt_target = "An image of the upper case letter R"
         if_loss = IFLossSinglePass(cfg, device, init_prompt=prompt_init, target_prompt=prompt_target)
-    
-    if cfg.loss.use_dreambooth_if:
-        unet_path = "/scratch/gilbreth/zhao969/diffusers/examples/dreambooth/multi_instance_grey/checkpoint-1000/unet"
-        if cfg.init_char.islower():
-            prompt_init = f"an image of {rare_tokens[string.ascii_lowercase.index(cfg.init_char)]} letter {cfg.init_char} in lower case"
-        else:
-            prompt_init = f"an image of letter {cfg.init_char} in upper case"
-        if cfg.target_char.islower():
-            prompt_target = f"an image of {rare_tokens[string.ascii_lowercase.index(cfg.target_char)]} letter {cfg.target_char} in lower case"
-        else:
-            prompt_target = f"an image of letter {cfg.target_char} in upper case"
-        if_loss = IFLossSinglePass(cfg, device, init_prompt=prompt_init, target_prompt=prompt_target, unet_path=unet_path)
-
-    if cfg.loss.use_font_loss:
-        #checkpoint = torch.load('/home/zhao969/Documents/saved_checkpoints/checkpoint_500.pt')
-        checkpoint = torch.load('/scratch/gilbreth/zhao969/FontClassifier/saved_checkpoints/case_sensitive_checkpoint_20.pt')
-        model_state = checkpoint['model_state_dict']
-        font_loss = FontClassLoss(device, model_state, cfg.target_char, 'arial', batch_size=cfg.batch_size, rotate=True)
 
     if cfg.loss.use_dual_font_loss or cfg.tuning.font_loss:
         checkpoint = torch.load('/home/zhao969/Documents/saved_checkpoints/checkpoint_500.pt')
@@ -183,8 +168,9 @@ if __name__ == "__main__":
             torch.ones(img_init_init.shape[0], img_init_init.shape[1],
                         3, device=device) * (1 - img_init_init[:, :, 3:4])
         img_init_init = img_init_init[:, :, :3]
-
-        shift_x = alignment(img_init, img_init_init, mode=cfg.alignment)
+        align_mode = "seperated"
+        # shift_x = alignment(img_init, img_init_init, mode=cfg.alignment)
+        shift_x = alignment(img_init, img_init_init, mode=align_mode, rotate=False)
 
         if cfg.use_wandb:
             plt.imshow(img_init.detach().cpu())
@@ -252,8 +238,8 @@ if __name__ == "__main__":
                 torch.ones(img_init_init.shape[0], img_init_init.shape[1],
                             3, device=device) * (1 - img_init_init[:, :, 3:4])
             img_init_init = img_init_init[:, :, :3]
-            transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
-
+            # transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
+            transform = lambda x: x
             #img = transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0)
             # img = torch.min(img, transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0))
             #shift_x = alignment(img, img_init_init, mode='overlap')
@@ -351,258 +337,39 @@ if __name__ == "__main__":
             scheduler.step()
 
 
-
-        blur_steps = 100
-        blur_loss = torch.nn.MSELoss()
-
-        if cfg.post_processing == "single-svg":
-            # render image
-            scene_args = pydiffvg.RenderFunction.serialize_scene(
-                w, h, shapes, shape_groups)
-            img = render(w, h, 2, 2, step, None, *scene_args)
-
-            # compose image with white background
-            img = img[:, :, 3:4] * img[:, :, :3] + \
-                torch.ones(img.shape[0], img.shape[1], 3,
-                            device=device) * (1 - img[:, :, 3:4])
-            img = img[:, :, :3]
-
-            scene_args_init = pydiffvg.RenderFunction.serialize_scene(w, h, shapes_init, shape_groups_init)
-            img_init_init = render(w, h, 2, 2, 0, None, *scene_args_init)
-            img_init_init = img_init_init[:, :, 3:4] * img_init_init[:, :, :3] + \
-                torch.ones(img_init_init.shape[0], img_init_init.shape[1],
-                            3, device=device) * (1 - img_init_init[:, :, 3:4])
-            img_init_init = img_init_init[:, :, :3]
-            transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
-
-            if shift_x != 0:
-                img = torch.min(torch.roll(img, -(shift_x // 2), 1), torch.roll(transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0), shift_x // 2, 1))
-            else:
-                img = torch.min(img, transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0))
-
-            x = img.unsqueeze(0).permute(0, 3, 1, 2)
-            x_blured = KF.median_blur(x.detach(), (5, 5))
-
-            shapes, shape_groups, parameters = init_shapes(
-                svg_path=cfg.target, trainable=cfg.trainable)
-            
-            pg = [{'params': parameters["point"], 'lr': cfg.lr_base["point"]}]
-            optim = torch.optim.Adam(pg, betas=(0.9, 0.9), eps=1e-6)
-
-            scheduler = LambdaLR(optim, lr_lambda=lr_lambda,
-                                last_epoch=-1)  # lr.base * lrlambda_f
-
-            for step in range(blur_steps):
-                loss_sum = 0.0
-                optim.zero_grad()
-
-                scene_args = pydiffvg.RenderFunction.serialize_scene(
-                    w, h, shapes, shape_groups)
-                img = render(w, h, 2, 2, step, None, *scene_args)
-
-                # compose image with white background
-                img = img[:, :, 3:4] * img[:, :, :3] + \
-                    torch.ones(img.shape[0], img.shape[1], 3,
-                            device=device) * (1 - img[:, :, 3:4])
-                img = img[:, :, :3]
-                
-                if cfg.save.video and (step % cfg.save.video_frame_freq == 0 or step == blur_steps - 1):
-                    save_image(img, os.path.join(current_experiment_dir,
-                            "video-png", f"iter{step+num_iter:04d}.png"), gamma)
-                    filename = os.path.join(
-                        current_experiment_dir, "video-svg", f"iter{step:04d}.svg")
-                    check_and_create_dir(filename)
-                    save_svg.save_svg(
-                        filename, w, h, shapes, shape_groups)
-                    if cfg.use_wandb:
-                        plt.imshow(img.detach().cpu())
-                        wandb.log({"img": wandb.Image(plt)}, step=step + num_iter)
-                        plt.close()
-                img = img.unsqueeze(0).permute(0, 3, 1, 2)
-
-                blur_loss(img, x_blured).backward()
-                optim.step()
-                scheduler.step()
-            filename = os.path.join(
-            current_experiment_dir, "output-svg", "output.svg")
-            check_and_create_dir(filename)
-            save_svg.save_svg(
-                filename, w, h, shapes, shape_groups)
-        elif cfg.post_processing == "dual-svg":
-            scene_args = pydiffvg.RenderFunction.serialize_scene(
-                w, h, shapes, shape_groups)
-            img = render(w, h, 2, 2, step, None, *scene_args)
-            img = img[:, :, 3:4] * img[:, :, :3] + \
-                torch.ones(img.shape[0], img.shape[1], 3,
-                            device=device) * (1 - img[:, :, 3:4])
-            img = img[:, :, :3]
-            scene_args_init = pydiffvg.RenderFunction.serialize_scene(w, h, shapes_init, shape_groups_init)
-            img_init_init = render(w, h, 2, 2, 0, None, *scene_args_init)
-            img_init_init = img_init_init[:, :, 3:4] * img_init_init[:, :, :3] + \
-                torch.ones(img_init_init.shape[0], img_init_init.shape[1],
-                            3, device=device) * (1 - img_init_init[:, :, 3:4])
-            img_init_init = img_init_init[:, :, :3]
-            transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
-
-            if shift_x != 0:
-                img = torch.min(torch.roll(img, -(shift_x // 2), 1), torch.roll(transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0), shift_x // 2, 1))
-            else:
-                img = torch.min(img, transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0))
-            # plt.imsave("dual.png", img.detach().cpu().numpy())
-            x = img.unsqueeze(0).permute(0, 3, 1, 2)
-            x_blured = KF.median_blur(x.detach(), (5, 5))
-            # plt.imsave("dual_blured_5.png", x_blured.squeeze().permute(1, 2, 0).detach().cpu().numpy())
-
-            shapes, shape_groups, parameters = init_shapes(svg_path=cfg.target, trainable=cfg.trainable)
-            shapes_init, shape_groups_init, parameters_init = init_shapes(svg_path=cfg.init, trainable=cfg.trainable)
-
-            pg = [{'params': parameters["point"] + parameters_init["point"], 'lr': cfg.lr_base["point"]}]
-        
-            optim = torch.optim.Adam(pg, betas=(0.9, 0.9), eps=1e-6)
-        
-            scheduler = LambdaLR(optim, lr_lambda=lr_lambda,
-                                last_epoch=-1)  # lr.base * lrlambda_f
-
-            for step in range(blur_steps):
-                loss_sum = 0.0
-                optim.zero_grad()
-
-                # render image
-                scene_args = pydiffvg.RenderFunction.serialize_scene(
-                    w, h, shapes, shape_groups)
-                img_init = render(w, h, 2, 2, 0, None, *scene_args)
-                img_init = img_init[:, :, 3:4] * img_init[:, :, :3] + \
-                    torch.ones(img_init.shape[0], img_init.shape[1],
-                            3, device=device) * (1 - img_init[:, :, 3:4])
-                img_init = img_init[:, :, :3]
-
-                scene_args_init = pydiffvg.RenderFunction.serialize_scene(w, h, shapes_init, shape_groups_init)
-                img_init_init = render(w, h, 2, 2, 0, None, *scene_args_init)
-                img_init_init = img_init_init[:, :, 3:4] * img_init_init[:, :, :3] + \
-                    torch.ones(img_init_init.shape[0], img_init_init.shape[1],
-                                3, device=device) * (1 - img_init_init[:, :, 3:4])
-                img_init_init = img_init_init[:, :, :3]
-                transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
-
-                if shift_x != 0:
-                    img = torch.min(torch.roll(img_init, -(shift_x // 2), 1), torch.roll(transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0), shift_x // 2, 1))
-                else:
-                    img = torch.min(img_init, transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0))
-                if cfg.save.video and (step % cfg.save.video_frame_freq == 0 or step == blur_steps - 1):
-                    # save_image(img, os.path.join(cfg.experiment_dir,
-                    #         "video-png", f"iter{step+num_iter:04d}.png"), gamma)
-                    # check_and_create_dir(filename)
-                    if cfg.use_wandb:
-                        plt.imshow(img.detach().cpu())
-                        wandb.log({"img": wandb.Image(plt)}, step=step + num_iter)
-                        plt.close()
-                
-                img = img.unsqueeze(0).permute(0, 3, 1, 2)  # HWC -> NCHW
-                blur_loss(img, x_blured).backward()
-                optim.step()
-                scheduler.step()
-        else:
-            for step in range(blur_steps):
-                loss_sum = 0.0
-                optim.zero_grad()
-
-                # render image
-                scene_args = pydiffvg.RenderFunction.serialize_scene(
-                    w, h, shapes, shape_groups)
-                img = render(w, h, 2, 2, step, None, *scene_args)
-
-                # compose image with white background
-                img = img[:, :, 3:4] * img[:, :, :3] + \
-                    torch.ones(img.shape[0], img.shape[1], 3,
-                            device=device) * (1 - img[:, :, 3:4])
-                img = img[:, :, :3]
-
-                scene_args_init = pydiffvg.RenderFunction.serialize_scene(w, h, shapes_init, shape_groups_init)
-                img_init_init = render(w, h, 2, 2, 0, None, *scene_args_init)
-                img_init_init = img_init_init[:, :, 3:4] * img_init_init[:, :, :3] + \
-                    torch.ones(img_init_init.shape[0], img_init_init.shape[1],
-                                3, device=device) * (1 - img_init_init[:, :, 3:4])
-                img_init_init = img_init_init[:, :, :3]
-                transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
-
-                if shift_x != 0:
-                    img = torch.min(torch.roll(img, -(shift_x // 2), 1), torch.roll(transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0), shift_x // 2, 1))
-                else:
-                    img = torch.min(img, transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0))
-                if cfg.save.video and (step % cfg.save.video_frame_freq == 0 or step == blur_steps - 1):
-                    save_image(img, os.path.join(current_experiment_dir,
-                            "video-png", f"iter{step+num_iter:04d}.png"), gamma)
-                    filename = os.path.join(
-                        current_experiment_dir, "video-svg", f"iter{step:04d}.svg")
-                    check_and_create_dir(filename)
-                    save_svg.save_svg(
-                        filename, w, h, shapes, shape_groups)
-                    if cfg.use_wandb:
-                        plt.imshow(img.detach().cpu())
-                        wandb.log({"img": wandb.Image(plt)}, step=step + num_iter)
-                        plt.close()
-                
-                x = img.unsqueeze(0).permute(0, 3, 1, 2)  # HWC -> NCHW
-                x = x.repeat(cfg.batch_size, 1, 1, 1)
-                x_aug = tvt.functional.invert(data_augs.forward(tvt.functional.invert(x)))  # perform data aug with black background
-
-                x_aug_blured = KF.median_blur(x_aug.detach(), (5, 5))
-                # x_aug_blured = KF.bilateral_blur(x_aug.detach(), (3, 3), 0.1, (1.5, 1.5))
-
-                blur_loss(x_aug, x_aug_blured).backward()
-                optim.step()
-                scheduler.step()
-                
-        filename = os.path.join(
-            current_experiment_dir, "output-svg", "output_1.svg")
-        check_and_create_dir(filename)
-        save_svg.save_svg(
-            filename, w, h, shapes, shape_groups)
-        
-        if cfg.post_processing != "single-svg":
-            filename = os.path.join(
-                current_experiment_dir, "output-svg", "output_2.svg")
-            check_and_create_dir(filename)
-            save_svg.save_svg(
-                filename, w, h, shapes_init, shape_groups_init)
-            
-            combine_svgs(os.path.join(current_experiment_dir, "output-svg", "output_1.svg"), 
-                        os.path.join(current_experiment_dir, "output-svg", "output_2.svg"), 
-                        shift_x, w, h)
-            
         scene_args = pydiffvg.RenderFunction.serialize_scene(
             w, h, shapes, shape_groups)
         img = render(w, h, 2, 2, step, None, *scene_args)
-
-        # compose image with white background
         img = img[:, :, 3:4] * img[:, :, :3] + \
             torch.ones(img.shape[0], img.shape[1], 3,
-                    device=device) * (1 - img[:, :, 3:4])
+                        device=device) * (1 - img[:, :, 3:4])
         img = img[:, :, :3]
-
         scene_args_init = pydiffvg.RenderFunction.serialize_scene(w, h, shapes_init, shape_groups_init)
         img_init_init = render(w, h, 2, 2, 0, None, *scene_args_init)
         img_init_init = img_init_init[:, :, 3:4] * img_init_init[:, :, :3] + \
             torch.ones(img_init_init.shape[0], img_init_init.shape[1],
                         3, device=device) * (1 - img_init_init[:, :, 3:4])
         img_init_init = img_init_init[:, :, :3]
-        transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
+        # transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
+        transform = lambda x: x
 
         if shift_x != 0:
             img = torch.min(torch.roll(img, -(shift_x // 2), 1), torch.roll(transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0), shift_x // 2, 1))
         else:
             img = torch.min(img, transform(img_init_init.permute(2, 0, 1)).permute(1, 2, 0))
-        x = img.unsqueeze(0).permute(0, 3, 1, 2)  # HWC -> NCHW
-        x = x.repeat(cfg.batch_size, 1, 1, 1)
-        x_aug = tvt.functional.invert(data_augs.forward(tvt.functional.invert(x)))
+        # plt.imsave("dual.png", img.detach().cpu().numpy())
+        x = img.unsqueeze(0).permute(0, 3, 1, 2)
+        x_blured = KF.median_blur(x.detach(), (5, 5))
+        # plt.imsave("dual_blured_5.png", x_blured.squeeze().permute(1, 2, 0).detach().cpu().numpy())
+
         if cfg.save.image:
-            hyper_classification_loss = torch.tensor(0.0)
-            if cfg.tuning.font_loss:
-                hyper_classification_rotate_loss = font_loss_rotate.forward(x_aug)[0]
-                hyper_classification_normal_loss = font_loss_normal.forward(x_aug)[0]
-                hyper_classification_loss = hyper_classification_rotate_loss + hyper_classification_normal_loss
+            # hyper_classification_loss = torch.tensor(0.0)
+            # if cfg.tuning.font_loss:
+            #     hyper_classification_rotate_loss = font_loss_rotate.forward(x_aug)[0]
+            #     hyper_classification_normal_loss = font_loss_normal.forward(x_aug)[0]
+            #     hyper_classification_loss = hyper_classification_rotate_loss + hyper_classification_normal_loss
             filename = os.path.join(
-                current_experiment_dir, "output-png", f"{hyper_classification_loss.item()}_output.png")
+                current_experiment_dir, "output-png", f"output.png")
             check_and_create_dir(filename)
             imshow = img.detach().cpu()
             pydiffvg.imwrite(imshow, filename, gamma=gamma)

@@ -188,7 +188,7 @@ class ContrastiveLoss(nn.Module):
         return (img_loss + text_loss) / 2
 
 class IFLossSinglePass(nn.Module):
-    def __init__(self, cfg, device, init_prompt=None, target_prompt=None, unet_path=None):
+    def __init__(self, cfg, device, init_prompt=None, target_prompt=None, unet_path=None, precomputed_embeds=False):
         super(IFLossSinglePass, self).__init__()
         self.cfg = cfg
         self.init_prompt = init_prompt
@@ -204,6 +204,7 @@ class IFLossSinglePass(nn.Module):
         self.alphas = self.pipe.scheduler.alphas_cumprod.to(self.device)
         self.sigmas = (1 - self.pipe.scheduler.alphas_cumprod).to(self.device)
         self.prompt_embeds = None
+        self.precomputed_embeds = precomputed_embeds
 
     def prompt_encode(self, init_prompt, target_prompt):
         prompt_embeds_init, negative_embeds_init = self.pipe.encode_prompt(init_prompt, do_classifier_free_guidance=True)
@@ -213,15 +214,20 @@ class IFLossSinglePass(nn.Module):
         prompt_embeds_target = torch.cat([negative_embeds_target, prompt_embeds_target])
         return prompt_embeds_init, prompt_embeds_target
 
-    def forward(self, x_aug):
+    def forward(self, x_aug, prompt_embeds_init=None, prompt_embeds_target=None):
         sds_loss = 0
         x_aug_rotate = x_aug
         x_aug_rotate = self.transform(x_aug_rotate)
         x_aug = torch.cat([x_aug, x_aug_rotate])
         batch_size = x_aug.shape[0]
         dtype = None
-        if self.prompt_embeds is None:
+        if (self.prompt_embeds is None) and (not self.precomputed_embeds):
             prompt_embeds_init, prompt_embeds_target = self.prompt_encode(self.init_prompt, self.target_prompt)
+            prompt_embeds_init = prompt_embeds_init.repeat_interleave(batch_size//2, 0)
+            prompt_embeds_target = prompt_embeds_target.repeat_interleave(batch_size//2, 0)
+            self.prompt_embeds = torch.cat([prompt_embeds_init, prompt_embeds_target])
+            dtype = prompt_embeds_init.dtype
+        elif self.precomputed_embeds:
             prompt_embeds_init = prompt_embeds_init.repeat_interleave(batch_size//2, 0)
             prompt_embeds_target = prompt_embeds_target.repeat_interleave(batch_size//2, 0)
             self.prompt_embeds = torch.cat([prompt_embeds_init, prompt_embeds_target])
@@ -362,7 +368,7 @@ class ConformalLoss:
             points_np = np.concatenate(points_np)
             faces = Delaunay(points_np).simplices
             is_intersect = np.array(
-                [poly.contains(Point(points_np[face].mean(0))) for face in faces], dtype=np.bool)
+                [poly.contains(Point(points_np[face].mean(0))) for face in faces], dtype=bool) # np.bool
             faces_.append(torch.from_numpy(
                 faces[is_intersect]).to(device, dtype=torch.int64))
         return faces_
@@ -471,7 +477,7 @@ class TrOCRLoss(nn.Module):
 
 
 class FontClassLoss(nn.Module):
-    def __init__(self, device, model_state, target_text, target_font, batch_size, rotate=True) -> None:
+    def __init__(self, device, model_state, target_text, target_font, batch_size, rotate=True, case_sensitive=True) -> None:
         super(FontClassLoss, self).__init__()
         self.device = device
         self.model = FontSimilarityClassifier()
@@ -487,15 +493,19 @@ class FontClassLoss(nn.Module):
         self.transform = lambda x: torchvision.transforms.functional.rotate(x, 180)
         self.tokenizer = open_clip.get_tokenizer('ViT-B-32')
         self.font_name = self.tokenizer(target_font).expand(batch_size, -1)
+        self.case_sensitive = case_sensitive
         self.label = torch.tensor(self.char_mapping(target_text)).repeat(batch_size)
         self.rotate = rotate
+        
 
     def char_mapping(self, char):
         if char.isupper():
             return ord(char) - ord('A')
         elif char.islower():
-            return ord(char) - ord('a') + 26 # if the number of classes is 52
-            #return ord(char) - ord('a') if number of class = 26
+            if self.case_sensitive:
+                return ord(char) - ord('a') + 26 # if the number of classes is 52
+            else:
+                return ord(char) - ord('a')
 
     def forward(self, x):
         # with torch.no_grad():

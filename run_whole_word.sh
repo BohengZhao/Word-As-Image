@@ -1,4 +1,7 @@
 #!/bin/bash
+source /home/zhao969/.bashrc
+conda activate ambigen
+cd $SLURM_SUBMIT_DIR
 
 set -e
 
@@ -6,17 +9,17 @@ USE_WANDB=1 # CHANGE IF YOU WANT WANDB
 WANDB_USER="zhao969"
 
 # tone_plus_conformal, tone, conformal, none, trocr, font_loss, font_loss_upgrade, dual_font_loss
-EXPERIMENT=dual_if # _dream # _font_style
+EXPERIMENT=dual_if_whole_word # _dream # _font_style
 
-WORD=E # No effect for this experiment
+WORDS=(vision learning)
 #TARGET=e
-TARGETS=("a")
+TARGETS=("e")
 #TARGETS=("y" "h" "l")
-letter_=("a")
-fonts=(Quicksand)   # (IndieFlower-Regular)
+letter_=("E")
+fonts=(IndieFlower-Regular)
 #styles=(Arial Curly Artistic Plain)
 styles=(plain)
-alignment=(overlap) #  seperated none
+alignment=(overlap)
 #fonts=(IndieFlower-Regular Quicksand LuckiestGuy-Regular)
 for j in "${fonts[@]}"
 do
@@ -25,14 +28,14 @@ do
     do
         for target in "${TARGETS[@]}"
         do 
-            for align in "${alignment[@]}"
+            for weight in 0.5
             do
-                for weight in 0.5
-                do
+                for WORD in "${WORDS[@]}"
+                do 
                     echo "$i"
                     font_name=$j
                     ARGS="--experiment $EXPERIMENT --optimized_letter ${i} --seed $SEED --font ${font_name} --use_wandb ${USE_WANDB} --wandb_user ${WANDB_USER} --init_char ${i} --target_char ${target}"
-                    CUDA_VISIBLE_DEVICES=0 python code/main_dual.py $ARGS --word "${WORD}" --dual_bias_weight_sweep "${weight}" --alignment "${align}" # --post_processing "else"
+                    CUDA_VISIBLE_DEVICES=0 python code/whole_word_opt.py $ARGS --word "${WORD}" --dual_bias_weight_sweep "${weight}"
                 done
             done
         done
